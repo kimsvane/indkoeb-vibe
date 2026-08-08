@@ -78,12 +78,48 @@ let aiConfig = {
   ollamaModel: 'llama3'
 };
 
+// Providers that are globally configured via server environment variables
+let serverConfiguredProviders = [];
+
 // --- Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
   setupEventListeners();
+  await detectServerConfig(); // Check server for globally configured API keys
   updateUIFromConfig();
 });
+
+// Detect which LLM providers are globally configured via server env vars
+async function detectServerConfig() {
+  try {
+    const res = await fetch('/api/llm/config');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    serverConfiguredProviders = data.availableProviders || [];
+
+    if (serverConfiguredProviders.length > 0) {
+      // If not already connected locally (e.g. new device/session), auto-connect via server config
+      if (!aiConfig.connected) {
+        aiConfig.provider = data.defaultProvider;
+        aiConfig.model = PROVIDER_DEFAULTS[data.defaultProvider]?.model || '';
+        aiConfig.connected = true;
+        // Save to localStorage so the session knows it's connected
+        saveConfig();
+        console.log(`[Settings] Auto-connected via server config: ${data.defaultProvider}`);
+      }
+      // If user's stored provider is not globally configured, switch to one that is
+      if (!serverConfiguredProviders.includes(aiConfig.provider) && aiConfig.provider !== 'ollama' && !aiConfig.apiKey) {
+        aiConfig.provider = data.defaultProvider;
+        aiConfig.model = PROVIDER_DEFAULTS[data.defaultProvider]?.model || '';
+        aiConfig.connected = true;
+        saveConfig();
+      }
+    }
+  } catch (err) {
+    console.warn('[Settings] Could not fetch server LLM config:', err.message);
+  }
+}
 
 // Load config from localStorage
 function loadConfig() {
@@ -133,7 +169,6 @@ function toggleProviderPanels(provider) {
     const defaults = PROVIDER_DEFAULTS[provider];
     if (defaults) {
       keyLabel.textContent = defaults.label;
-      keyHelp.innerHTML = defaults.help;
       apiModelInput.placeholder = defaults.model;
       
       if (defaults.showUrl) {
@@ -142,6 +177,38 @@ function toggleProviderPanels(provider) {
         apiUrlGroup.classList.add('hidden');
       }
     }
+    
+    // Show server-configured notice if this provider is globally configured
+    updateServerConfigNotice(provider);
+  }
+}
+
+// Show/hide a notice inside the API panel if the provider is globally configured on the server
+function updateServerConfigNotice(provider) {
+  let noticeEl = document.getElementById('server-config-notice');
+  
+  if (!noticeEl) {
+    noticeEl = document.createElement('div');
+    noticeEl.id = 'server-config-notice';
+    noticeEl.className = 'server-config-notice';
+    panelApi.insertBefore(noticeEl, panelApi.firstChild);
+  }
+
+  if (serverConfiguredProviders.includes(provider)) {
+    noticeEl.innerHTML = `
+      <span class="server-notice-icon">✓</span>
+      <strong>${PROVIDER_DEFAULTS[provider]?.label || provider}</strong> er globalt konfigureret via servermiljøvariabel.
+      Du behøver ikke at indtaste en API-nøgle — den bruges automatisk for alle brugere og enheder.
+    `;
+    noticeEl.style.display = 'flex';
+    apiKeyInput.disabled = true;
+    apiKeyInput.placeholder = '(Bruger serverens nøgle automatisk)';
+  } else {
+    noticeEl.style.display = 'none';
+    apiKeyInput.disabled = false;
+    const defaults = PROVIDER_DEFAULTS[provider];
+    keyHelp.innerHTML = defaults?.help || '';
+    apiKeyInput.placeholder = 'Indtast din API-nøgle...';
   }
 }
 

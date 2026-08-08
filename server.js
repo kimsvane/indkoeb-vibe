@@ -510,6 +510,29 @@ function setCachedSearch(query, data) {
 
 // --- API Routes for LLM & Recipe ---
 
+// 0. Get globally configured LLM providers on the server
+app.get('/api/llm/config', (req, res) => {
+  const providers = {
+    gemini: !!process.env.GEMINI_API_KEY,
+    anthropic: !!(process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY),
+    deepseek: !!process.env.DEEPSEEK_API_KEY,
+    mistral: !!process.env.MISTRAL_API_KEY,
+    openai: !!process.env.OPENAI_API_KEY
+  };
+
+  const available = Object.entries(providers)
+    .filter(([_, configured]) => configured)
+    .map(([name]) => name);
+
+  // Default to the first configured provider
+  const defaultProvider = available[0] || null;
+
+  res.json({
+    availableProviders: available,
+    defaultProvider: defaultProvider
+  });
+});
+
 // 1. Test connection to LLM
 app.post('/api/llm/test', async (req, res) => {
   const { provider, apiKey, baseUrl, model } = req.body;

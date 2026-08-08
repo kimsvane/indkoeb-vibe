@@ -1286,6 +1286,33 @@ body {
 /* Expose helper selector */
 .provider-panel.hidden { display: none; }
 
+/* --- Server Global Config Notice --- */
+.server-config-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(52, 211, 153, 0.08);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.server-config-notice strong {
+  color: var(--green-organic);
+}
+
+.server-notice-icon {
+  font-size: 1rem;
+  color: var(--green-organic);
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
 /* Responsive adjustments */
 @media (max-width: 640px) {
   .header-top-row { flex-direction: column; align-items: flex-start; }
