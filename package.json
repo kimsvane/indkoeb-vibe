@@ -1,0 +1,15 @@
+{
+  "name": "dansk-indkoebssoegemaskine",
+  "version": "1.0.0",
+  "description": "Dansk Indkøbssøgemaskine - cross-store grocery search",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2"
+  }
+}

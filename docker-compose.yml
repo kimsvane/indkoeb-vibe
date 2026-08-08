@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  prisjagt:
+    build: .
+    container_name: prisjagt
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - .env:/app/.env # Gør det muligt at opdatere API-nøgler uden at genbygge billedet

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrisJagt | Find billigste dagligvarer på tværs af butikker</title>
+  <!-- Google Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  
+  <div class="glow-bg"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="main-header">
+      <div class="header-top-row">
+        <div class="logo">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="logo-icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5V6a3.75 3.75 0 1 0-7.5 0v4.5m11.356-1.993 1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 0 1-1.12-1.243l1.264-12A1.125 1.125 0 0 1 5.513 7.5h12.974c.576 0 1.059.435 1.119 1.007ZM8.625 10.5a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm7.5 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+          </svg>
+          <h1>Pris<span>Jagt</span></h1>
+        </div>
+        <div class="header-actions">
+          <div id="ai-status-badge" class="ai-badge disconnected">
+            <span class="pulse-dot"></span>
+            <span class="badge-text">AI Frakoblet</span>
+          </div>
+          <button id="settings-toggle-btn" class="icon-btn" aria-label="Åbn AI indstillinger">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="action-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.936 6.936 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <p class="tagline">Søg dagligvarer på tværs af nemlig.com, REMA 1000, Netto, Føtex, Coop m.fl.</p>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="app-nav-tabs">
+      <button class="nav-tab active" id="tab-btn-search" data-target="tab-content-search">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="tab-icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.637 10.637Z" />
+        </svg>
+        Søg tilbud
+      </button>
+      <button class="nav-tab" id="tab-btn-recipe" data-target="tab-content-recipe">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="tab-icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+        </svg>
+        Scan opskrift
+      </button>
+    </nav>
+
+    <!-- TAB: Search Content -->
+    <div id="tab-content-search" class="tab-pane active">
+      <!-- Search Section -->
+      <section class="search-section">
+      <div class="search-card">
+        <form id="search-form" class="search-form">
+          <div class="input-wrapper">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="search-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.637 10.637Z" />
+            </svg>
+            <input type="text" id="search-input" placeholder="Søg efter f.eks. mælk, smør, hakket oksekød..." autocomplete="off" required>
+            <button type="button" id="clear-search" class="clear-button" aria-label="Ryd søgning">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <button type="submit" class="submit-button">Søg priser</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Control Center (Filters & Sorting) -->
+    <section class="controls-section hidden" id="controls-section">
+      <div class="controls-wrapper">
+        <!-- Main Filter Toggles -->
+        <div class="filter-toggles">
+          <button class="toggle-btn" id="toggle-organic" data-active="false">
+            <span class="dot"></span>
+            Økologisk 🌿
+          </button>
+          <button class="toggle-btn" id="toggle-offer" data-active="false">
+            <span class="dot"></span>
+            Kun Tilbud %
+          </button>
+        </div>
+
+        <!-- Store Filters -->
+        <div class="store-filter-container">
+          <label for="store-select">Butik:</label>
+          <select id="store-select" class="custom-select">
+            <option value="all">Alle butikker</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+
+        <!-- Category Filter -->
+        <div class="store-filter-container">
+          <label for="category-select">Kategori:</label>
+          <select id="category-select" class="custom-select">
+            <option value="all">Alle kategorier</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+
+        <!-- Sorting -->
+        <div class="sort-container">
+          <label for="sort-select">Sorter efter:</label>
+          <select id="sort-select" class="custom-select">
+            <option value="price-asc">Billigste pris (standard)</option>
+            <option value="unitprice-asc">Laveste enhedspris (kr/l, kr/kg)</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stats Panel -->
+    <section class="stats-section hidden" id="stats-section">
+      <!-- Dynamically populated stats cards -->
+    </section>
+
+    <!-- Main Content Area -->
+    <main class="content-area">
+      <!-- Loading Skeleton (Hidden by default) -->
+      <div id="loading-state" class="loading-state hidden">
+        <div class="skeleton-grid">
+          <!-- 6 skeleton cards -->
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+        </div>
+      </div>
+
+      <!-- Results Grid -->
+      <div id="results-grid" class="results-grid">
+        <!-- Start/Empty State -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-illustration">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="empty-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 0 0-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 0 0-16.536-1.84M7.5 14.25 5.106 5.272M6 20.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm12.75 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+            </svg>
+          </div>
+          <h2>Klar til at sammenligne priser</h2>
+          <p>Indtast en dagligvare (f.eks. "økologisk mælk", "kærgården", "agurk") i søgefeltet ovenfor for at scanne de danske supermarkeder.</p>
+          <div class="popular-searches">
+            <span>Prøv at søge på:</span>
+            <button class="search-chip">Mælk</button>
+            <button class="search-chip">Smør</button>
+            <button class="search-chip">Hakket oksekød</button>
+            <button class="search-chip">Pepsi Max</button>
+          </div>
+        </div>
+      </div>
+    </main>
+    </div> <!-- END OF TAB: Search Content -->
+
+    <!-- TAB: Recipe Content -->
+    <div id="tab-content-recipe" class="tab-pane">
+      <!-- Recipe Search Card -->
+      <section class="search-section">
+        <div class="search-card">
+          <div class="recipe-input-group">
+            <h2 class="section-title">Scan opskrift efter tilbud</h2>
+            <p class="section-desc">Indtast URL'en til en opskrift (f.eks. fra Valdemarsro, Coop Opskrifter eller lignende) for at udtrække ingredienser og finde de bedste priser på tværs af alle butikker.</p>
+          </div>
+          <form id="recipe-form" class="search-form">
+            <div class="input-wrapper">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="search-icon">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
+              </svg>
+              <input type="url" id="recipe-url-input" placeholder="Indtast opskrift URL (f.eks. https://www.valdemarsro.dk/...)" autocomplete="off" required>
+              <button type="button" id="clear-recipe-url" class="clear-button" aria-label="Ryd URL">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <button type="submit" class="submit-button" id="recipe-submit-btn">Scan opskrift</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Recipe Process Tracker / Loader -->
+      <section id="recipe-status-section" class="recipe-status-section hidden">
+        <div class="recipe-status-card">
+          <div class="spinner-container">
+            <div class="custom-spinner"></div>
+          </div>
+          <div class="status-steps">
+            <div class="status-step" id="step-fetch">1. Henter opskriftside...</div>
+            <div class="status-step" id="step-extract">2. Analyserer og udtrækker ingredienser med AI...</div>
+            <div class="status-step" id="step-search">3. Søger priser på tværs af butikker...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Recipe Results Area -->
+      <section id="recipe-results-section" class="recipe-results-section hidden">
+        <!-- Recipe Overview Dashboard -->
+        <div class="recipe-dashboard">
+          <div class="dashboard-card">
+            <div class="dash-label">Estimeret total (Billigst)</div>
+            <div class="dash-val" id="recipe-total-price">0.00 kr</div>
+            <div class="dash-sub" id="recipe-matched-count">0 af 0 ingredienser fundet</div>
+          </div>
+          <div class="dashboard-card">
+            <div class="dash-label">Estimeret total (Økologisk)</div>
+            <div class="dash-val text-green" id="recipe-organic-total-price">0.00 kr</div>
+            <div class="dash-sub">Økologiske alternativer valgt</div>
+          </div>
+          <div class="dashboard-card">
+            <div class="dash-label">Anbefalet Butik</div>
+            <div class="dash-val text-accent" id="recipe-recommended-store">Ingen match</div>
+            <div class="dash-sub" id="recipe-store-coverage">Flest matchende varer ét sted</div>
+          </div>
+        </div>
+
+        <!-- Recipe Controls -->
+        <div class="recipe-controls">
+          <button class="toggle-btn" id="recipe-toggle-organic" data-active="false">
+            <span class="dot"></span>
+            Vælg Økologisk 🌿
+          </button>
+          <button class="submit-button secondary-btn" id="recipe-copy-list-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="btn-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0A2.25 2.25 0 0 1 13.5 3.75h-3a2.25 2.25 0 0 1-2.166-1.862m7.332 0a9 9 0 0 1-7.332 0M21 12c0 1.2-.405 2.28-1.09 3.13L18 12V9m-8.1 10.5H5.25A2.25 2.25 0 0 1 3 17.25V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25v2.25" />
+            </svg>
+            Kopiér indkøbsliste
+          </button>
+        </div>
+
+        <!-- Ingredients List & Matches -->
+        <h3 class="subsection-title">Ingredienser og bedste priser</h3>
+        <div id="recipe-ingredients-grid" class="recipe-ingredients-grid">
+          <!-- Dynamically populated with recipe ingredient cards -->
+        </div>
+      </section>
+    </div> <!-- END OF TAB: Recipe Content -->
+
+    <!-- Footer -->
+    <footer class="main-footer">
+      <p>&copy; 2026 PrisJagt. Udviklet til personlig prissammenligning.</p>
+    </footer>
+  </div>
+
+  <!-- AI Settings Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>AI Forbindelse & Indstillinger</h2>
+        <button id="close-settings-btn" class="close-btn" aria-label="Luk indstillinger">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-intro">Konfigurer en LLM (kunstig intelligens) for at scanne opskrifter direkte fra nettet og finde priser på alle ingredienser på én gang.</p>
+        
+        <form id="settings-form">
+          <div class="form-group">
+            <label for="settings-provider">AI Provider</label>
+            <select id="settings-provider" class="custom-select full-width">
+              <option value="gemini">Gemini API (Google)</option>
+              <option value="anthropic">Claude API (Anthropic)</option>
+              <option value="deepseek">DeepSeek API</option>
+              <option value="mistral">Mistral AI</option>
+              <option value="openai">OpenAI / Kompatibel API</option>
+              <option value="ollama">Lokal LLM (Ollama)</option>
+            </select>
+          </div>
+
+          <!-- API Settings Panel (Common for Gemini, Claude, DeepSeek, Mistral, OpenAI) -->
+          <div id="settings-panel-api" class="provider-panel">
+            <div class="form-group">
+              <label id="settings-key-label" for="settings-api-key">API-nøgle</label>
+              <input type="password" id="settings-api-key" class="custom-input" placeholder="Indtast din API-nøgle...">
+              <p class="input-help" id="settings-key-help">Hvis du lader feltet stå tomt, bruges nøglen defineret i serverens <code>.env</code> fil.</p>
+            </div>
+            <div class="form-group">
+              <label for="settings-api-model">Model</label>
+              <input type="text" id="settings-api-model" class="custom-input" placeholder="gemini-2.0-flash" value="gemini-2.0-flash">
+            </div>
+            <!-- Custom Base URL (Only visible/relevant for OpenAI compatible, e.g. LM Studio, Groq, OpenRouter) -->
+            <div class="form-group hidden" id="settings-api-url-group">
+              <label for="settings-api-url">Base URL (valgfri)</label>
+              <input type="text" id="settings-api-url" class="custom-input" placeholder="f.eks. https://api.openai.com/v1">
+              <p class="input-help">Løber du en lokal OpenAI-kompatibel server (f.eks. LM Studio) kan du angive adressen her.</p>
+            </div>
+          </div>
+
+          <!-- Ollama Settings Panel -->
+          <div id="settings-panel-ollama" class="provider-panel hidden">
+            <div class="form-group">
+              <label for="settings-ollama-url">Ollama Base URL</label>
+              <input type="text" id="settings-ollama-url" class="custom-input" placeholder="http://localhost:11434" value="http://localhost:11434">
+            </div>
+            <div class="form-group">
+              <label for="settings-ollama-model">Model Navn</label>
+              <input type="text" id="settings-ollama-model" class="custom-input" placeholder="f.eks. llama3, mistral..." value="llama3">
+              <p class="input-help">Sørg for, at modellen er hentet lokalt (<code>ollama run &lt;model&gt;</code>).</p>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button type="button" id="settings-test-btn" class="submit-button secondary-btn">Test Forbindelse</button>
+            <button type="submit" class="submit-button">Gem Indstillinger</button>
+          </div>
+          
+          <div id="settings-test-result" class="test-result-box hidden"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="index.js"></script>
+  <script src="settings.js"></script>
+  <script src="recipe.js"></script>
+</body>
+</html>
