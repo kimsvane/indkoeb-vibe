@@ -590,15 +590,16 @@ app.post('/api/recipe/scan', async (req, res) => {
     
     console.log(`[Recipe Scan] Cleaned recipe content length: ${cleanText.length} chars (truncated to ${truncatedText.length})`);
     
-    const prompt = `Du er en madlavnings- og indkøbsassistent. Du skal analysere den medfølgende tekst fra en opskrifts-hjemmeside.
-Din opgave er at udtrække alle ingredienser og returnere dem som en ren JSON-array af strenge.
+    const prompt = `Du er en madlavnings- og indkøbsassistent. Du skal analysere teksten fra en opskrifts-hjemmeside.
+Din opgave er at udtrække alle ingredienser og returnere dem som en JSON-array af objekter.
 
 Følg disse regler strengt:
-1. Hver streng i JSON-arrayet skal KUN være navnet på selve råvaren på DANSK (f.eks. "hakket oksekød", "piskefløde", "løg", "tomatpuré").
-2. Du skal fjerne alle mængder, vægte og enheder (f.eks. fjerne "500 g", "3 spsk", "2 dl", "knivspids", "dåse").
-3. Du skal fjerne valgfrie tilføjelser (f.eks. ændre "smør til stegning" til "smør").
-4. Hvis en ingrediens er meget specifik som f.eks. "økologisk mælk", skal du bare returnere "mælk" (vores system filtrerer selv økologi bagefter).
-5. Svar KUN med den rå JSON-array. Ingen forklaringer, ingen markdown-blokke (som \`\`\`json). Det skal starte med [ og slutte med ].
+1. Hvert objekt skal have præcis disse felter:
+   - "name": Råvarens navn på DANSK. Fjern mængder/enheder. Bevar formen (f.eks. "fersk kyllingebryst", "hakket oksekød", "flødeost").
+   - "searchQuery": En kort, præcis søgestreng til en supermarkeds-søgemaskine. Brug det vigtigste ord + form, f.eks. "kyllingebryst fersk", "hakket oksekød", "piskefløde". Hvis det er kød eller fisk, der skal bruges fersk/frossen i en varm ret, skal du ALTID tilføje ordet "fersk" (f.eks. "kyllingebryst fersk" eller "laks fersk") for at undgå at søgemaskinen finder pålæg. ALDRIG inkluder mængder.
+   - "category": Én af disse kategorier: "kød", "fisk", "mejeri", "grønt", "tørvarer", "brød", "konserves", "krydderier", "frost", "drikkevarer", "andet".
+   - "excludeTerms": JSON-array med ord der IKKE må optræde i produktnavnet, mærket eller kategorien. Brug dette til at undgå forkerte produktformer (f.eks. pålæg, skiver, skåret, stegt, dåse). Eksempler: For fersk "kyllingebryst" skal du ekskludere ["pålæg", "pålækker", "skiver", "skåret", "strimler", "nuggets", "hakket", "dåse", "stegt"]. For "oksekød" i en steg-ret, ekskluder ["pålæg", "leverpostej", "hakket"]. For "piskefløde", ekskluder ["flødeost", "is", "creme fraiche"]. Lad listen være tom [] hvis der ikke er risiko for forveksling.
+2. Returner KUN den rå JSON-array. Ingen markdown, ingen forklaringer. Array starter med [ og slutter med ].
 
 Opskriftstekst:
 ${truncatedText}`;
@@ -613,15 +614,28 @@ ${truncatedText}`;
     }
     
     console.log(`[Recipe Scan] Parse ingredients JSON:`, cleanJsonStr);
-    const ingredients = JSON.parse(cleanJsonStr);
+    let parsedIngredients = JSON.parse(cleanJsonStr);
     
-    if (!Array.isArray(ingredients)) {
+    if (!Array.isArray(parsedIngredients)) {
       throw new Error("LLM returnerede ikke et JSON array.");
     }
     
+    // Normalize: support both old string format and new object format
+    const ingredients = parsedIngredients.map(i => {
+      if (typeof i === 'string') {
+        return { name: i.trim(), searchQuery: i.trim(), category: 'andet', excludeTerms: [] };
+      }
+      return {
+        name: (i.name || '').trim(),
+        searchQuery: (i.searchQuery || i.name || '').trim(),
+        category: (i.category || 'andet').trim(),
+        excludeTerms: Array.isArray(i.excludeTerms) ? i.excludeTerms.map(t => t.toLowerCase()) : []
+      };
+    }).filter(i => i.name);
+    
     res.json({
       url,
-      ingredients: ingredients.map(i => i.trim()).filter(Boolean)
+      ingredients
     });
     
   } catch (err) {
@@ -629,6 +643,97 @@ ${truncatedText}`;
     res.status(500).json({ error: `Opskrift-scanning mislykkedes: ${err.message}` });
   }
 });
+
+// --- Relevance Scoring for Recipe Ingredients ---
+// Scores a product hit against an ingredient object.
+// Returns a number: higher = more relevant.
+function scoreProductRelevance(product, ingredient) {
+  const productName = (product.name || '').toLowerCase();
+  const productBrand = (product.brand || '').toLowerCase();
+  const productCat = (product.category || '').toLowerCase();
+  const productSubCat = (product.subCategory || '').toLowerCase();
+  
+  const searchTokens = (ingredient.searchQuery || ingredient.name || '').toLowerCase().split(/\s+/);
+  const excludeTerms = ingredient.excludeTerms || [];
+  
+  let score = 0;
+  
+  // Hard penalty: if any excluded term appears in product name, brand, category, or subcategory, this match is wrong
+  for (const term of excludeTerms) {
+    const lowerTerm = term.toLowerCase();
+    const checkMatch = (str) => {
+      if (!str) return false;
+      if (str.includes(lowerTerm)) return true;
+      // Special case: if we want to exclude "pålæg", we also exclude "pålækker" and "pålægs"
+      if (lowerTerm === 'pålæg' && (str.includes('pålækker') || str.includes('pålægs'))) return true;
+      return false;
+    };
+
+    if (
+      checkMatch(productName) ||
+      checkMatch(productBrand) ||
+      checkMatch(productCat) ||
+      checkMatch(productSubCat)
+    ) {
+      return -9999; // Effectively blacklisted
+    }
+  }
+  
+  // Global penalized terms (deli/processed forms when looking for fresh ingredients)
+  const FRESH_CATEGORIES = ['kød', 'fisk', 'mejeri'];
+  if (FRESH_CATEGORIES.includes(ingredient.category)) {
+    // Check if user is explicitly searching for deli products in the recipe (e.g. "baconskiver", "røget laks")
+    const isIngredientDeli = searchTokens.some(t => 
+      t.includes('pålæg') || 
+      t.includes('pålækker') || 
+      t.includes('skive') || 
+      t.includes('skiver') || 
+      t.includes('røget') || 
+      t.includes('tørret')
+    );
+    
+    if (!isIngredientDeli) {
+      // NOTE: We don't include 'frys' here so frozen meat/fish can be matched if needed.
+      const DELI_TERMS = ['pålæg', 'pålækker', 'skiver', 'skåret', 'skiveskåret', 'røget', 'tørret', 'blandede', 'tilberedt', 'konserve', 'dåse', 'kødboller', 'pølse', 'paté', 'leverpostej', 'tartelet'];
+      for (const term of DELI_TERMS) {
+        if (
+          productName.includes(term) ||
+          productBrand.includes(term) ||
+          productCat.includes(term) ||
+          productSubCat.includes(term)
+        ) {
+          score -= 300; // Strong penalty
+        }
+      }
+    }
+  }
+
+  // Reward: exact search token matches in product name
+  for (const token of searchTokens) {
+    if (token.length < 3) continue; // Skip very short tokens ("og", "af" etc)
+    if (productName.includes(token)) {
+      score += 30;
+    }
+  }
+
+  // Bonus: product category matches ingredient category
+  if (product.category) {
+    if (
+      (ingredient.category === 'kød' && (productCat.includes('kød') || productCat.includes('fjerkræ') || productSubCat.includes('kød') || productSubCat.includes('fjerkræ'))) ||
+      (ingredient.category === 'fisk' && (productCat.includes('fisk') || productSubCat.includes('fisk'))) ||
+      (ingredient.category === 'mejeri' && (productCat.includes('mejeri') || productCat.includes('ost') || productCat.includes('mælk') || productSubCat.includes('mejeri') || productSubCat.includes('ost') || productSubCat.includes('mælk'))) ||
+      (ingredient.category === 'grønt' && (productCat.includes('grønt') || productCat.includes('frugt') || productCat.includes('salat') || productSubCat.includes('grønt') || productSubCat.includes('frugt') || productSubCat.includes('salat'))) ||
+      (ingredient.category === 'brød' && (productCat.includes('brød') || productCat.includes('bageri') || productSubCat.includes('brød') || productSubCat.includes('bageri')))
+    ) {
+      score += 20;
+    }
+  }
+  
+  // Small bonus for being on offer (tie-breaker, not primary)
+  if (product.isOffer) score += 2;
+
+  return score;
+}
 
 // 3. Search and aggregate prices for a list of ingredients
 app.post('/api/recipe/prices', async (req, res) => {
@@ -638,7 +743,15 @@ app.post('/api/recipe/prices', async (req, res) => {
     return res.status(400).json({ error: "Ingredienser skal angives som et array" });
   }
   
-  console.log(`[Recipe Prices] Beginning aggregate search for: ${ingredients.join(', ')}`);
+  // Normalize: support both old string array and new object array format
+  const normalizedIngredients = ingredients.map(i => {
+    if (typeof i === 'string') {
+      return { name: i, searchQuery: i, category: 'andet', excludeTerms: [] };
+    }
+    return i;
+  });
+
+  console.log(`[Recipe Prices] Beginning aggregate search for: ${normalizedIngredients.map(i => i.name).join(', ')}`);
   
   // Re-use internal API search logic
   const searchForIngredient = async (ingredient) => {
@@ -716,8 +829,8 @@ app.post('/api/recipe/prices', async (req, res) => {
   };
   
   try {
-    // Generate tasks for the rate-limiter
-    const tasks = ingredients.map(ing => () => searchForIngredient(ing).then(results => ({
+    // Generate tasks for the rate-limiter (use searchQuery for better API results)
+    const tasks = normalizedIngredients.map(ing => () => searchForIngredient(ing.searchQuery || ing.name).then(results => ({
       ingredient: ing,
       results
     })));
@@ -728,14 +841,28 @@ app.post('/api/recipe/prices', async (req, res) => {
     const aggregated = searchResults.map(({ ingredient, results }) => {
       const withPrice = results.filter(r => r.price !== null);
       
-      const bestMatch = withPrice[0] || null;
-      const organicOption = withPrice.find(r => r.isOrganic) || null;
+      // Score and sort results by relevance before price
+      const scored = withPrice.map(r => ({
+        ...r,
+        _score: scoreProductRelevance(r, ingredient)
+      })).filter(r => r._score > -9999); // Remove blacklisted items
+      
+      // Sort: descending relevance score, then ascending price as tie-breaker
+      scored.sort((a, b) => {
+        if (b._score !== a._score) return b._score - a._score;
+        return (a.price || 99999) - (b.price || 99999);
+      });
+      
+      const bestMatch = scored[0] || null;
+      const organicOption = scored.find(r => r.isOrganic) || null;
       
       return {
-        ingredient,
+        ingredient: ingredient.name, // Send back just the name for the frontend
+        searchQuery: ingredient.searchQuery,
+        category: ingredient.category,
         bestMatch,
         organicOption,
-        alternatives: withPrice.slice(0, 5) // top 5 alternatives
+        alternatives: scored.slice(0, 5)
       };
     });
     
