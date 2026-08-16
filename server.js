@@ -818,7 +818,7 @@ Følg disse regler strengt:
     - "category": Én af disse kategorier: "kød", "fisk", "mejeri", "grønt", "tørvarer", "brød", "konserves", "krydderier", "frost", "drikkevarer", "andet".
     - "excludeTerms": JSON-array med ord der IKKE må optræde i produktnavnet, mærket eller kategorien. Brug dette til at undgå forkerte produktformer (f.eks. pålæg, skiver, skåret, stegt, dåse). Eksempler: For "kyllingebryst" ekskluder ["pålæg", "pålækker", "skiver", "skåret", "strimler", "nuggets", "hakket", "dåse", "stegt"]. For "oksekød" i en steg-ret, ekskluder ["pålæg", "leverpostej", "hakket"]. For "piskefløde", ekskluder ["flødeost", "is", "creme fraiche"]. Lad listen være tom [] hvis der ikke er risiko for forveksling.
     - "amount": Den mængde af råvaren opskriften bruger, SOM TAL (f.eks. 200, 1.5, 6, 0.5). Hvis mængden ikke står eksplicit i teksten (f.eks. "smag til", "efter behov"), sæt til null.
-    - "unit": Enheden SOM STRENG, en af: "g", "kg", "ml", "l", "stk", "bundt", "dåse", "pose", "spsk", "tsk", "portion" eller null hvis ukendt. Brug "g"/"kg" for vægt, "ml"/"l" for volumen, "stk" for hele styk (f.eks. "2 æg" -> amount 2, unit "stk"). Brug "l" for liter, "ml" for milliliter.
+    - "unit": Enheden SOM STRENG, en af: "g", "kg", "ml", "l", "stk", "fed" (et fed hvidløg), "bundt", "dåse", "pose", "spsk", "tsk", "portion" eller null hvis ukendt. Brug "g"/"kg" for vægt, "ml"/"l" for volumen, "stk" for hele styk (f.eks. "2 æg" -> amount 2, unit "stk"), "fed" for et enkelt fed hvidløg (bemærk at en hel hvidløg indeholder mange fed).
 2. Returner KUN den rå JSON-array. Ingen markdown, ingen forklaringer. Array starter med [ og slutter med ].
 
 Opskriftstekst:
@@ -1114,7 +1114,7 @@ app.post('/api/recipe/prices', async (req, res) => {
         unit: ingredient.unit ?? null,
         bestMatch,
         organicOption,
-        alternatives: scored.slice(0, 5)
+        alternatives: scored.slice(0, 60)
       };
     });
     

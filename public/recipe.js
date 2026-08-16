@@ -402,9 +402,15 @@ function renderIngredientsGrid(view = getRecipeView()) {
         : (match.distanceKm != null ? `<span class="distance-chip">📍 ${formatDistance(match.distanceKm)}</span>` : '');
 
       const leftover = computeLeftover(item, match);
-      const leftoverHtml = leftover
-        ? `<div class="leftover-chip">📦 Pakke ${escapeHtml(leftover.packageText)} · brugt ${escapeHtml(leftover.needText)} · til overs: <b>${escapeHtml(leftover.leftoverText || 'køb mere')}</b></div>`
-        : '';
+      let leftoverHtml = '';
+      if (leftover) {
+        const parts = [`📦 Pakke ${escapeHtml(leftover.packageText)}`];
+        if (leftover.needText) parts.push(`brugt ${escapeHtml(leftover.needText)}`);
+        let tail = '';
+        if (leftover.leftoverText) tail = ` · til overs: <b>${escapeHtml(leftover.leftoverText)}</b>`;
+        else if (leftover.note) tail = ` · <i>${escapeHtml(leftover.note)}</i>`;
+        leftoverHtml = `<div class="leftover-chip">${parts.join(' · ')}${tail}</div>`;
+      }
 
       card.innerHTML = `
         <div class="card-header">
@@ -459,8 +465,14 @@ function copyShoppingListToClipboard() {
        const offerText = match.isOffer ? ' (Tilbud!)' : '';
        const leftover = computeLeftover(item, match);
        const leftoverText = leftover
-         ? ` | Køb ${leftover.packageText}, brugt ${leftover.needText}, til overs ${leftover.leftoverText || 'køb mere'}`
-         : '';
+          ? (() => {
+              const bits = [`Køb ${leftover.packageText}`];
+              if (leftover.needText) bits.push(`brugt ${leftover.needText}`);
+              if (leftover.leftoverText) bits.push(`til overs ${leftover.leftoverText}`);
+              else if (leftover.note) bits.push(`(${leftover.note})`);
+              return ` | ${bits.join(', ')}`;
+            })()
+          : '';
        text += `- [ ] ${item.ingredient.toUpperCase()}:\n`;
        text += `      Valgt: ${match.name}${organicText}${offerText}\n`;
        text += `      Butik: ${match.store} | Pris: ${formatPrice(match.price)} (${details})${leftoverText}\n\n`;
@@ -524,14 +536,14 @@ function recipeQuantityToCanonical(amount, unit) {
     'kg': ['mass', 1000], 'g': ['mass', 1],
     'l': ['volume', 1000], 'liter': ['volume', 1000],
     'dl': ['volume', 100], 'cl': ['volume', 10], 'ml': ['volume', 1],
-    'stk': ['count', 1], 'styks': ['count', 1]
+    'stk': ['count', 1], 'styks': ['count', 1], 'fed': ['count', 1]
   };
   const u = unitMap[String(unit).toLowerCase()];
   if (!u) return null;
   return { value: Number(amount) * u[1], dimension: u[0] };
 }
 
-// Pæn formatering af en kanonisk værdi.
+// Pæn formatering af en kanonisk værdi (bruges til pakkestørrelse).
 function formatQuantity(value, dimension) {
   if (value == null) return '';
   if (dimension === 'mass') {
@@ -550,29 +562,53 @@ function formatQuantity(value, dimension) {
   return String(value);
 }
 
+// Formatering af opskriftens nødvendige mængde med den oprindelige enhed
+// (f.eks. "1 fed" i stedet for "1 stk").
+function formatNeed(value, unit) {
+  const u = String(unit || '').toLowerCase();
+  if (u === 'g') return value >= 1000 ? `${(value / 1000).toLocaleString('da-DK', { maximumFractionDigits: 2 })} kg` : `${Math.round(value)} g`;
+  if (u === 'kg') return `${value} kg`;
+  if (u === 'ml') return value >= 1000 ? `${(value / 1000).toLocaleString('da-DK', { maximumFractionDigits: 2 })} l` : `${Math.round(value)} ml`;
+  if (u === 'l') return `${value} l`;
+  return `${Math.round(value)} ${u}`;
+}
+
 // Beregner hvor meget der er til overs når man køber den valgte pakke.
-// Returnerer null hvis det ikke kan beregnes (f.eks. ukendt størrelse eller
-// uforenelige enheder).
+// Returnerer altid pakke + brugt; "til overs" kun når enhederne er direkte
+// sammenlignelige. F.eks. opskrift "1 fed" vs pakke "1 hvidløg" (hel vare)
+// vises ærligt uden et misvisende tal.
 function computeLeftover(item, match) {
   if (!match || !match.size) return null;
-  if (item.amount == null || !item.unit) return null;
-
   const pkg = parsePackageSize(match.size);
+  if (!pkg) return null;
+  const packageText = formatQuantity(pkg.value, pkg.dimension);
+
+  if (item.amount == null || !item.unit) {
+    return { packageText, needText: null, leftoverText: null, note: null };
+  }
   const need = recipeQuantityToCanonical(item.amount, item.unit);
-  if (!pkg || !need) return null;
+  if (!need) return { packageText, needText: null, leftoverText: null, note: null };
+  const needText = formatNeed(need.value, item.unit);
 
-  // Kun sammenlignelig ved samme dimension; løse count-enheder (bundt/dåse)
-  // sammenlignes ikke med hinanden.
-  if (pkg.dimension !== need.dimension) return null;
-  if (pkg.dimension === 'count' && String(item.unit).toLowerCase() !== 'stk') return null;
+  // Kun sammenlignelig ved samme dimension og kompatible count-enheder
+  // ("stk" = hel vare; "fed" er en underenhed og sammenlignes ikke med "stk").
+  const compatible = pkg.dimension === need.dimension &&
+    !(pkg.dimension === 'count' && String(item.unit).toLowerCase() !== 'stk');
+  if (compatible) {
+    const leftover = pkg.value - need.value;
+    return {
+      packageText,
+      needText,
+      leftoverText: leftover >= 0 ? formatQuantity(leftover, pkg.dimension) : null,
+      note: leftover < 0 ? 'køb mere' : null
+    };
+  }
 
-  const leftover = pkg.value - need.value;
-  return {
-    packageText: formatQuantity(pkg.value, pkg.dimension),
-    needText: formatQuantity(need.value, pkg.dimension),
-    leftover,
-    leftoverText: leftover >= 0 ? formatQuantity(leftover, pkg.dimension) : null
-  };
+  // Uforenelige enheder (f.eks. "1 fed" vs pakke "1 hvidløg" som hel vare)
+  const note = String(item.unit).toLowerCase() === 'fed'
+    ? 'købes som hel vare — flere fed i en hvidløg'
+    : 'købt som hel vare';
+  return { packageText, needText, leftoverText: null, note };
 }
 
 // --- Butiksfilter (multivalg) ---
