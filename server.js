@@ -19,6 +19,12 @@ try {
   console.warn('[Stores] Kunne ikke indlæse butiksdata:', err.message);
 }
 
+// --- ShelfAtlas (optional 3rd price source: regular + campaign prices for DK chains) ---
+// Aktiveres kun hvis SHELFATLAS_API_KEY er sat i .env. Giver normalpriser
+// ("regular") samt tilbud ("campaign") for fysiske butikker og understøtter geo-søgning.
+const SHELFATLAS_API_KEY = process.env.SHELFATLAS_API_KEY || '';
+const SHELFATLAS_BASE = process.env.SHELFATLAS_BASE || 'https://api.shelfatlas.com/api/v1/public/catalog';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -219,9 +225,11 @@ function nearestStoreDistanceKm(storeName, lat, lon) {
 }
 
 // Attach distanceKm to a list of results given a user location. Returns the list.
+// Kun Tjek-resultater mangler koordinater (de kommer fra vores egen butiksdata);
+// ShelfAtlas-resultater har allerede beregnet distanceKm, og nemlig beholdes som null.
 function attachDistances(results, lat, lon) {
   for (const r of results) {
-    r.distanceKm = r.source === 'tjek' ? nearestStoreDistanceKm(r.store, lat, lon) : null;
+    if (r.source === 'tjek') r.distanceKm = nearestStoreDistanceKm(r.store, lat, lon);
   }
   return results;
 }
@@ -233,6 +241,141 @@ function parseLocation(lat, lon) {
   if (Number.isNaN(latNum) || Number.isNaN(lonNum)) return null;
   if (Math.abs(latNum) > 90 || Math.abs(lonNum) > 180) return null;
   return { lat: latNum, lon: lonNum };
+}
+
+// --- ShelfAtlas integration (optional) ---
+// Simpel in-memory TTL-cache til at beskytte mod rate limits.
+const _shelfCache = new Map();
+function shelfCacheGet(key, ttlMs) {
+  const e = _shelfCache.get(key);
+  if (e && Date.now() - e.t < ttlMs) return e.v;
+  return undefined;
+}
+function shelfCacheSet(key, v, ttlMs) {
+  _shelfCache.set(key, { t: Date.now(), v });
+}
+
+let _shelfStores = null;
+async function getShelfAtlasStores() {
+  if (_shelfStores) return _shelfStores;
+  const cached = shelfCacheGet('stores', 60 * 60 * 1000);
+  if (cached) { _shelfStores = cached; return cached; }
+  const headers = { Authorization: `Bearer ${SHELFATLAS_API_KEY}` };
+  const res = await fetch(`${SHELFATLAS_BASE}/stores?limit=500`, { headers });
+  if (!res.ok) throw new Error(`ShelfAtlas stores HTTP ${res.status}`);
+  const data = await res.json();
+  const map = {};
+  for (const s of (data.data || [])) {
+    map[s.id] = {
+      lat: s.lat, lng: s.lng,
+      chainName: s.chainName, chainSlug: s.chainSlug,
+      name: s.name, city: s.city
+    };
+  }
+  _shelfStores = map;
+  shelfCacheSet('stores', map, 60 * 60 * 1000);
+  return map;
+}
+
+// Normaliser ét ShelfAtlas-tilbud til samme format som Tjek/nemlig-resultater.
+function parseShelfAtlasItem(offer, productMap, storeMap, location) {
+  const productId = offer.productId || (offer.matchedProductIds && offer.matchedProductIds[0]);
+  const product = productId ? productMap[productId] : null;
+  const store = offer.storeId ? storeMap[offer.storeId] : null;
+  if (!store) return null;
+
+  const name = (product && product.canonicalName) || offer.rawName || 'Ukendt';
+  const price = parseFloat(offer.price);
+  if (Number.isNaN(price)) return null;
+
+  const isOffer = offer.priceKind === 'campaign';
+  let distanceKm = null;
+  if (location && store.lat != null && store.lng != null) {
+    distanceKm = Math.round(haversineKm(location.lat, location.lon, store.lat, store.lng) * 10) / 10;
+  }
+
+  let size = '';
+  if (product && product.volumeMl) size = `${product.volumeMl} ml`;
+  else if (product && product.packageSizeValue) size = `${product.packageSizeValue} ${product.packageSizeUnit || ''}`.trim();
+  else if (offer.volumeMl) size = `${offer.volumeMl} ml`;
+
+  const pricePerUnit = offer.unitPrice != null ? parseFloat(offer.unitPrice) : null;
+  let unitPriceLabel = '';
+  if (pricePerUnit != null) {
+    if (product && product.volumeMl) unitPriceLabel = 'kr/l';
+    else if (product && product.packageSizeUnit === 'kg') unitPriceLabel = 'kr/kg';
+    else if (product && product.packageSizeUnit === 'g') unitPriceLabel = 'kr/kg';
+  }
+
+  return {
+    id: `shelfatlas-${offer.id}`,
+    source: 'shelfatlas',
+    name,
+    brand: '',
+    store: store.chainName || store.chainSlug,
+    price,
+    originalPrice: offer.originalPrice != null ? parseFloat(offer.originalPrice) : null,
+    isOffer,
+    isOrganic: false,
+    category: null,
+    size,
+    pricePerUnit,
+    unitPriceLabel,
+    imageUrl: offer.imageUrl || (product && product.imageUrl) || null,
+    validUntil: offer.validTo ? new Date(offer.validTo).toLocaleDateString('da-DK') : null,
+    distanceKm
+  };
+}
+
+// Hent regular + campaign priser fra ShelfAtlas for et søgeord.
+// Returnerer [] hvis ingen nøgle er sat eller ved fejl (graceful fallback).
+async function fetchShelfAtlas(query, location = null) {
+  if (!SHELFATLAS_API_KEY) return [];
+  try {
+    const headers = { Authorization: `Bearer ${SHELFATLAS_API_KEY}` };
+
+    const cacheKey = `products:${query.toLowerCase()}`;
+    let products = shelfCacheGet(cacheKey, 5 * 60 * 1000);
+    if (!products) {
+      const prodRes = await fetch(`${SHELFATLAS_BASE}/products?q=${encodeURIComponent(query)}&limit=30`, { headers });
+      if (!prodRes.ok) throw new Error(`ShelfAtlas products HTTP ${prodRes.status}`);
+      const prodData = await prodRes.json();
+      products = prodData.data || [];
+      shelfCacheSet(cacheKey, products, 5 * 60 * 1000);
+    }
+    if (!products.length) return [];
+
+    const productMap = {};
+    for (const p of products) productMap[p.id] = p;
+    const ids = products.map(p => p.id).join(',');
+
+    const offRes = await fetch(`${SHELFATLAS_BASE}/offers?product_ids=${encodeURIComponent(ids)}&limit=200`, { headers });
+    if (!offRes.ok) throw new Error(`ShelfAtlas offers HTTP ${offRes.status}`);
+    const offData = await offRes.json();
+    const offers = offData.data || [];
+
+    const storeMap = await getShelfAtlasStores();
+
+    // Vælg billigste tilbud per butik+produkt
+    const groups = {};
+    for (const offer of offers) {
+      const pid = offer.productId || (offer.matchedProductIds && offer.matchedProductIds[0]);
+      const key = `${offer.storeId}|${pid}`;
+      const price = parseFloat(offer.price);
+      if (Number.isNaN(price)) continue;
+      if (!groups[key] || price < groups[key]._price) groups[key] = { offer, _price: price };
+    }
+
+    const items = [];
+    for (const { offer } of Object.values(groups)) {
+      const item = parseShelfAtlasItem(offer, productMap, storeMap, location);
+      if (item) items.push(item);
+    }
+    return items;
+  } catch (err) {
+    console.error('[Search] ShelfAtlas fejlede:', err.message);
+    return [];
+  }
 }
 
 // Determine if a product is organic (Økologisk)
@@ -476,13 +619,18 @@ app.get('/api/search', async (req, res) => {
   };
 
   try {
-    // Run both searches in parallel
-    const [nemligItems, tjekItems] = await Promise.all([fetchNemlig(), fetchTjek()]);
+    // Run both searches in parallel (ShelfAtlas er valgfri og returnerer [] uden nøgle)
+    const [nemligItems, tjekItems, shelfItems] = await Promise.all([
+      fetchNemlig(),
+      fetchTjek(),
+      fetchShelfAtlas(query, location)
+    ]);
     
     // Combine items
-    const combined = [...nemligItems, ...tjekItems];
+    const combined = [...nemligItems, ...tjekItems, ...shelfItems];
     
     // Attach distance to nearest store branch when a user location is provided
+    // (ShelfAtlas-resultater har allerede distanceKm; nemlig beholdes som null)
     if (location) attachDistances(combined, location.lat, location.lon);
 
     // Sort: cheapest first. If price is null, push to the end.
@@ -882,8 +1030,11 @@ app.post('/api/recipe/prices', async (req, res) => {
       
       const tjekData = await tjekRes.json();
       const tjekItems = tjekData.map(parseTjekProduct);
-      
-      const combined = [...nemligItems, ...tjekItems];
+
+      // 3. ShelfAtlas (valgfrit — regular + campaign priser for fysiske butikker)
+      const shelfItems = await fetchShelfAtlas(ingredient, location);
+
+      const combined = [...nemligItems, ...tjekItems, ...shelfItems];
       
       // Sort cheapest first
       combined.sort((a, b) => {
@@ -913,9 +1064,16 @@ app.post('/api/recipe/prices', async (req, res) => {
     const aggregated = searchResults.map(({ ingredient, results }) => {
       const withPrice = results.filter(r => r.price !== null);
       
-      // Attach distance to nearest store branch when a user location is provided
+      // Attach distance to nearest store branch when a user location is provided.
+      // Tjek mangler koordinater (bruger vores butiksdata); ShelfAtlas har allerede
+      // distanceKm; nemlig forbliver null.
       const located = location
-        ? withPrice.map(r => ({ ...r, distanceKm: r.source === 'tjek' ? nearestStoreDistanceKm(r.store, location.lat, location.lon) : null }))
+        ? withPrice.map(r => ({
+            ...r,
+            distanceKm: r.source === 'tjek'
+              ? nearestStoreDistanceKm(r.store, location.lat, location.lon)
+              : (r.distanceKm ?? null)
+          }))
         : withPrice;
       
       // Score and sort results by relevance before price

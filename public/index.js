@@ -459,7 +459,9 @@ function createProductCard(item, isCheapest) {
   const categoryTag = item.subCategory || item.category;
 
   // Source label
-  const sourceLabel = item.source === 'tjek' ? 'Tilbudsavis' : 'nemlig.com';
+  const sourceLabel = item.source === 'tjek' ? 'Tilbudsavis'
+    : item.source === 'shelfatlas' ? 'ShelfAtlas'
+    : 'nemlig.com';
 
   // Distance label
   const distanceDisplay = item.source === 'nemlig'
