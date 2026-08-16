@@ -930,11 +930,22 @@ function scoreProductRelevance(product, ingredient) {
     }
   }
 
-  // Reward: exact search token matches in product name
+  // Reward: exact search token matches in product name (stronger for the main word)
   for (const token of searchTokens) {
     if (token.length < 3) continue; // Skip very short tokens ("og", "af" etc)
     if (productName.includes(token)) {
-      score += 30;
+      score += token.length >= 4 ? 50 : 30;
+    }
+  }
+
+  // Penalty: product is a derivative/processed form (creme, snack, dressing, saft,
+  // juice, sauce, suppe, pålæg, postej) of the searched item — usually NOT what the
+  // recipe wants. Only penalize when the query itself doesn't contain that word.
+  const MODIFIER_TERMS = ['creme', 'snack', 'dressing', 'saft', 'juice', 'sauce', 'suppe', 'pålæg', 'postej'];
+  const queryHas = (t) => searchTokens.some(tok => tok.includes(t) || t.includes(tok));
+  for (const term of MODIFIER_TERMS) {
+    if (productName.includes(term) && !queryHas(term)) {
+      score -= 45;
     }
   }
 
@@ -1136,6 +1147,7 @@ app.post('/api/recipe/prices', async (req, res) => {
     
     res.json({
       ingredients: aggregated,
+      shelfAtlasActive: !!process.env.SHELFATLAS_API_KEY,
       summary: {
         totalEstimate: parseFloat(totalEstimate.toFixed(2)),
         organicTotalEstimate: parseFloat(organicTotalEstimate.toFixed(2)),

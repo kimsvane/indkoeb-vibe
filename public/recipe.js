@@ -351,6 +351,17 @@ function renderRecipeResults() {
 
   populateChainFilter();
   renderIngredientsGrid(view);
+
+  const note = document.getElementById('recipe-source-note');
+  if (note) {
+    if (recipeResults && recipeResults.shelfAtlasActive) {
+      note.classList.add('hidden');
+    } else {
+      note.textContent = 'ℹ️ Fysiske butikker viser kun varer der er PÅ TILBUD (Tjek). For at se almindelige priser i fysiske butikker uanset tilbud, tilføj SHELFATLAS_API_KEY til din .env og genstart. Online-priser (nemlig.com) vises altid.';
+      note.classList.remove('hidden');
+    }
+  }
+
   recipeResultsSection.classList.remove('hidden');
 }
 
