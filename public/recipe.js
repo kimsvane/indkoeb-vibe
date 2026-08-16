@@ -8,7 +8,8 @@
 let recipeIngredients = [];
 let recipeResults = null;
 let organicMode = false;
-let selectedChains = null; // null = alle butikker; ellers et Set af valgte butiksnavne
+let offersOnly = true; // true = vis kun tilbudsvarer (default). false = vis alt, manuelt valg af butikker.
+let selectedChains = null; // null = alle butikker (ON-mode) / ingen valgt (OFF-mode); ellers et Set af valgte butiksnavne
 let availableChains = [];
 
 // --- DOM References ---
@@ -107,6 +108,25 @@ function setupRecipeListeners() {
     recipeToggleOrganic.dataset.active = organicMode ? 'true' : 'false';
     renderIngredientsGrid();
   });
+
+  // Vis kun tilbudsvarer — default til. Når fravalgt fravælges alle butikker,
+  // så brugeren manuelt vælger hvilke butikker der skal hentes priser fra.
+  const recipeToggleOffers = document.getElementById('recipe-toggle-offers');
+  if (recipeToggleOffers) {
+    recipeToggleOffers.addEventListener('click', () => {
+      offersOnly = !offersOnly;
+      recipeToggleOffers.dataset.active = offersOnly ? 'true' : 'false';
+      if (!offersOnly) {
+        // Fravalgt: tøm butiksvalg (null = ingen valgt i OFF-mode) så brugeren selv vælger
+        selectedChains = null;
+      } else {
+        // Valgt: vis alle butikker igen
+        selectedChains = null;
+      }
+      updateChainButtonLabel();
+      renderRecipeResults();
+    });
+  }
 
   // Copy list button
   recipeCopyListBtn.addEventListener('click', copyShoppingListToClipboard);
@@ -252,20 +272,22 @@ function getRecipeView() {
   const distanceActive = !(maxKm == null || !loc);
   const chainEmpty = !selectedChains || selectedChains.size === 0;
 
-  // Ingen aktive filtre -> returnér rå resultater
-  if (!distanceActive && chainEmpty) return recipeResults;
-
   const inRange = (r) =>
     !r ||
     r.source === 'nemlig' ||
     !distanceActive ||
     (r.distanceKm != null && r.distanceKm <= maxKm);
 
-  const inChain = (r) => chainEmpty || selectedChains.has(r.store);
+  // ON-mode (kun tilbud) + ingen butik valgt => alle butikker.
+  // OFF-mode + ingen butik valgt => ingen (brugeren skal vælge manuelt).
+  const inChain = (r) => {
+    if (chainEmpty) return offersOnly;
+    return selectedChains.has(r.store);
+  };
 
   const ingredients = recipeResults.ingredients.map(item => {
     const candidates = [item.bestMatch, ...(item.alternatives || [])].filter(Boolean);
-    const allowed = candidates.filter(r => inRange(r) && inChain(r));
+    const allowed = candidates.filter(r => (!offersOnly || r.isOffer) && inRange(r) && inChain(r));
     const match = allowed[0] || null;
     const organicOption = allowed.find(r => r.isOrganic) || null;
     const alternatives = allowed.slice(0, 5);
@@ -359,6 +381,17 @@ function renderRecipeResults() {
     } else {
       note.textContent = 'ℹ️ Fysiske butikker viser kun varer der er PÅ TILBUD (Tjek). For at se almindelige priser i fysiske butikker uanset tilbud, tilføj SHELFATLAS_API_KEY til din .env og genstart. Online-priser (nemlig.com) vises altid.';
       note.classList.remove('hidden');
+    }
+  }
+
+  // Hint når "Vis kun tilbudsvarer" er fravalgt og ingen butik er valgt
+  const hint = document.getElementById('recipe-offers-hint');
+  if (hint) {
+    if (!offersOnly && (!selectedChains || selectedChains.size === 0)) {
+      hint.textContent = '🔘 Tilbudsfiltret er slået fra. Vælg én eller flere butikker i listen ovenfor for at se priser (både tilbud og almindelige priser, f.eks. nemlig.com).';
+      hint.classList.remove('hidden');
+    } else {
+      hint.classList.add('hidden');
     }
   }
 
@@ -650,12 +683,14 @@ function updateChainButtonLabel() {
   const btn = document.getElementById('chain-filter-btn');
   if (!btn) return;
   const total = availableChains.length;
-  const sel = selectedChains ? selectedChains.size : total;
   const label = btn.querySelector('.chain-count');
   if (!label) return;
-  label.textContent = (!selectedChains || sel === total)
-    ? 'Alle butikker'
-    : `${sel} af ${total} butikker`;
+  if (!selectedChains) {
+    label.textContent = offersOnly ? 'Alle butikker' : 'Vælg butikker';
+  } else {
+    const sel = selectedChains.size;
+    label.textContent = sel === total ? 'Alle butikker' : `${sel} af ${total} butikker`;
+  }
 }
 
 function onChainFilterChange() {

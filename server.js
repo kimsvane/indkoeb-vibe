@@ -288,7 +288,9 @@ function parseShelfAtlasItem(offer, productMap, storeMap, location) {
   const price = parseFloat(offer.price);
   if (Number.isNaN(price)) return null;
 
-  const isOffer = offer.priceKind === 'campaign';
+  // ShelfAtlas' /offers er et rent tilbuds-feed: alle poster er kampagnetilbud.
+  // (API'en har intet priceKind-felt og eksponerer ikke regulære hyldepriser.)
+  const isOffer = true;
   let distanceKm = null;
   if (location && store.lat != null && store.lng != null) {
     distanceKm = Math.round(haversineKm(location.lat, location.lon, store.lat, store.lng) * 10) / 10;
@@ -327,8 +329,8 @@ function parseShelfAtlasItem(offer, productMap, storeMap, location) {
   };
 }
 
-// Hent regular + campaign priser fra ShelfAtlas for et søgeord.
-// Returnerer [] hvis ingen nøgle er sat eller ved fejl (graceful fallback).
+// Hent tilbudspriser fra ShelfAtlas for et søgeord (kun kampagnetilbud — API'en
+// eksponerer ikke regulære hyldepriser). Returnerer [] ved manglende nøgle/fejl.
 async function fetchShelfAtlas(query, location = null) {
   if (!SHELFATLAS_API_KEY) return [];
   try {
@@ -373,7 +375,11 @@ async function fetchShelfAtlas(query, location = null) {
     }
     return items;
   } catch (err) {
-    console.error('[Search] ShelfAtlas fejlede:', err.message);
+    if (String(err.message).includes('429')) {
+      console.error('[Search] ShelfAtlas: gratis kvote opbrugt (HTTP 429) — kun nemlig + Tjek bruges. Skift til partner-/betalingsnøgle for fuld dækning.');
+    } else {
+      console.error('[Search] ShelfAtlas fejlede:', err.message);
+    }
     return [];
   }
 }
