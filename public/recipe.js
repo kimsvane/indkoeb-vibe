@@ -39,6 +39,14 @@ const recipeIngredientsGrid = document.getElementById('recipe-ingredients-grid')
 document.addEventListener('DOMContentLoaded', () => {
   setupTabNavigation();
   setupRecipeListeners();
+  // Re-render recipe results when location/distance changes
+  if (window.onLocationChange) {
+    window.onLocationChange(() => {
+      if (recipeResults && !recipeResultsSection.classList.contains('hidden')) {
+        renderRecipeResults();
+      }
+    });
+  }
 });
 
 // --- Tab Navigation Setup ---
@@ -162,7 +170,7 @@ async function handleRecipeScan(url) {
     const priceRes = await fetch('/api/recipe/prices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ingredients: recipeIngredients })
+      body: JSON.stringify(buildPricePayload(recipeIngredients))
     });
 
     if (!priceRes.ok) {
@@ -196,6 +204,16 @@ function resetSteps() {
   });
 }
 
+function buildPricePayload(ingredients) {
+  const payload = { ingredients };
+  const state = window.getLocationFilterState();
+  if (state.location) {
+    payload.lat = state.location.lat;
+    payload.lon = state.location.lon;
+  }
+  return payload;
+}
+
 function setStepState(element, state, text) {
   element.className = `status-step ${state}`;
   if (text) {
@@ -204,10 +222,73 @@ function setStepState(element, state, text) {
 }
 
 // --- Render Results ---
-function renderRecipeResults() {
-  if (!recipeResults) return;
+function getRecipeView() {
+  if (!recipeResults) return null;
 
-  const sum = recipeResults.summary;
+  const state = window.getLocationFilterState();
+  const maxKm = state.maxKm;
+  const loc = state.location;
+
+  // No active distance filter -> show full results as-is
+  if (maxKm == null || !loc) return recipeResults;
+
+  const inRange = (r) => !r || r.source === 'nemlig' || (r.distanceKm != null && r.distanceKm <= maxKm);
+
+  const ingredients = recipeResults.ingredients.map(item => {
+    const alternatives = (item.alternatives || []).filter(inRange);
+    const bestMatch = inRange(item.bestMatch) ? item.bestMatch : alternatives[0] || null;
+    let organicOption = inRange(item.organicOption) ? item.organicOption : null;
+    if (!organicOption) {
+      organicOption = alternatives.find(r => r.isOrganic) || null;
+    }
+    return { ...item, bestMatch, organicOption, alternatives };
+  });
+
+  // Recompute summary based on in-range matches only
+  let matchedCount = 0;
+  const storeCount = {};
+  ingredients.forEach(item => {
+    if (item.bestMatch) {
+      matchedCount++;
+      const store = item.bestMatch.store;
+      storeCount[store] = (storeCount[store] || 0) + 1;
+    }
+  });
+
+  let recommendedStore = 'Ingen match';
+  let maxMatches = 0;
+  for (const [store, count] of Object.entries(storeCount)) {
+    if (count > maxMatches) {
+      maxMatches = count;
+      recommendedStore = store;
+    }
+  }
+
+  const totalEstimate = ingredients.reduce((acc, item) => acc + (item.bestMatch?.price || 0), 0);
+  const organicTotalEstimate = ingredients.reduce((acc, item) => {
+    const match = item.organicOption || item.bestMatch;
+    return acc + (match?.price || 0);
+  }, 0);
+
+  return {
+    ...recipeResults,
+    ingredients,
+    summary: {
+      ...recipeResults.summary,
+      totalEstimate: Math.round(totalEstimate * 100) / 100,
+      organicTotalEstimate: Math.round(organicTotalEstimate * 100) / 100,
+      matchedCount,
+      recommendedStore,
+      storeMatches: maxMatches
+    }
+  };
+}
+
+function renderRecipeResults() {
+  const view = getRecipeView();
+  if (!view) return;
+
+  const sum = view.summary;
   
   // Dashboard values
   recipeTotalPrice.textContent = formatPrice(sum.totalEstimate);
@@ -216,15 +297,15 @@ function renderRecipeResults() {
   recipeRecommendedStore.textContent = sum.recommendedStore;
   recipeStoreCoverage.textContent = `Dækker ${sum.storeMatches} ud af ${sum.totalCount} varer`;
 
-  renderIngredientsGrid();
+  renderIngredientsGrid(view);
   recipeResultsSection.classList.remove('hidden');
 }
 
-function renderIngredientsGrid() {
+function renderIngredientsGrid(view = getRecipeView()) {
   recipeIngredientsGrid.innerHTML = '';
-  if (!recipeResults || !recipeResults.ingredients) return;
+  if (!view || !view.ingredients) return;
 
-  recipeResults.ingredients.forEach(item => {
+  view.ingredients.forEach(item => {
     // Choose item based on organic mode toggle
     const match = (organicMode && item.organicOption) ? item.organicOption : item.bestMatch;
     const isOrganicUsed = organicMode && item.organicOption;
@@ -252,6 +333,9 @@ function renderIngredientsGrid() {
       if (isOrganicUsed) badges += `<span class="badge badge-cheapest">✓ Valgt</span>`;
 
       const brandSize = [match.brand, match.size].filter(Boolean).join(' · ');
+      const distanceInfo = match.source === 'nemlig'
+        ? `<span class="distance-chip delivery-chip">🛒 Levering</span>`
+        : (match.distanceKm != null ? `<span class="distance-chip">📍 ${formatDistance(match.distanceKm)}</span>` : '');
 
       card.innerHTML = `
         <div class="card-header">
@@ -265,6 +349,7 @@ function renderIngredientsGrid() {
               <div class="product-store-recipe">${escapeHtml(match.store)}</div>
               <div class="product-title-recipe">${escapeHtml(match.name)}</div>
               ${brandSize ? `<div class="product-desc-recipe">${escapeHtml(brandSize)}</div>` : ''}
+              ${distanceInfo}
             </div>
           </div>
         </div>
@@ -284,17 +369,18 @@ function renderIngredientsGrid() {
 
 // --- Shopping List Formatting ---
 function copyShoppingListToClipboard() {
-  if (!recipeResults) return;
+  const view = getRecipeView();
+  if (!view) return;
 
   const url = recipeUrlInput.value.trim();
-  const sum = recipeResults.summary;
+  const sum = view.summary;
   
   let text = `🍽️ PRISJAGT INDKØBSLISTE\n`;
   text += `Opskrift: ${url}\n`;
   text += `Tilstand: ${organicMode ? 'Økologisk prioriteret 🌿' : 'Billigste prioriteret 💵'}\n`;
   text += `--------------------------------------------------\n\n`;
 
-  recipeResults.ingredients.forEach(item => {
+  view.ingredients.forEach(item => {
     const match = (organicMode && item.organicOption) ? item.organicOption : item.bestMatch;
     
     if (match) {
@@ -326,6 +412,12 @@ function copyShoppingListToClipboard() {
 function formatPrice(price) {
   if (price === null || price === undefined) return '–';
   return price.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
+}
+
+function formatDistance(km) {
+  if (km == null) return '';
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toLocaleString('da-DK', { maximumFractionDigits: 1 })} km`;
 }
 
 function escapeHtml(str) {

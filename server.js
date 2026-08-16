@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { callLLM } from './lib/llm.js';
 
@@ -9,6 +10,14 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// --- Store locations (OpenStreetMap data, see scripts/build-stores.mjs) ---
+let STORE_DATA = { chains: {}, aliases: {} };
+try {
+  STORE_DATA = JSON.parse(readFileSync(path.join(__dirname, 'lib', 'stores.json'), 'utf8'));
+} catch (err) {
+  console.warn('[Stores] Kunne ikke indlæse butiksdata:', err.message);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -169,6 +178,62 @@ class NemligSessionManager {
 const nemligSession = new NemligSessionManager();
 
 // --- API Helpers & Normalizers ---
+
+// Haversine distance between two coordinates (in km)
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Resolve a store name (as displayed, e.g. normalized chain name) to a chain key in STORE_DATA
+function resolveChainKey(storeName) {
+  if (!storeName) return null;
+  const trimmed = storeName.trim();
+  if (STORE_DATA.chains[trimmed]) return trimmed;
+  const alias = STORE_DATA.aliases[trimmed.toLowerCase()];
+  if (alias && STORE_DATA.chains[alias]) return alias;
+  const canonical = normalizeStore(trimmed);
+  if (STORE_DATA.chains[canonical]) return canonical;
+  return null;
+}
+
+// Distance (km) from a coordinate to the nearest branch of the store's chain.
+// Returns null if the chain is unknown (no location data).
+function nearestStoreDistanceKm(storeName, lat, lon) {
+  const key = resolveChainKey(storeName);
+  if (!key) return null;
+  const branches = STORE_DATA.chains[key];
+  if (!branches || branches.length === 0) return null;
+  let best = Infinity;
+  for (const b of branches) {
+    const d = haversineKm(lat, lon, b.lat, b.lon);
+    if (d < best) best = d;
+  }
+  return best === Infinity ? null : Math.round(best * 10) / 10;
+}
+
+// Attach distanceKm to a list of results given a user location. Returns the list.
+function attachDistances(results, lat, lon) {
+  for (const r of results) {
+    r.distanceKm = r.source === 'tjek' ? nearestStoreDistanceKm(r.store, lat, lon) : null;
+  }
+  return results;
+}
+
+// Parse a lat/lon pair (query params or body fields). Returns {lat, lon} or null.
+function parseLocation(lat, lon) {
+  const latNum = parseFloat(lat);
+  const lonNum = parseFloat(lon);
+  if (Number.isNaN(latNum) || Number.isNaN(lonNum)) return null;
+  if (Math.abs(latNum) > 90 || Math.abs(lonNum) > 180) return null;
+  return { lat: latNum, lon: lonNum };
+}
 
 // Determine if a product is organic (Økologisk)
 // NOTE: \b word boundaries in JS regex do NOT work with non-ASCII chars like ø/Ø.
@@ -334,7 +399,9 @@ app.get('/api/search', async (req, res) => {
     return res.status(400).json({ error: "Søgeord mangler" });
   }
 
-  console.log(`[Search] New query received: "${query}"`);
+  const location = parseLocation(req.query.lat, req.query.lon);
+
+  console.log(`[Search] New query received: "${query}"${location ? ` (location ${location.lat},${location.lon})` : ''}`);
   
   const results = [];
   
@@ -415,6 +482,9 @@ app.get('/api/search', async (req, res) => {
     // Combine items
     const combined = [...nemligItems, ...tjekItems];
     
+    // Attach distance to nearest store branch when a user location is provided
+    if (location) attachDistances(combined, location.lat, location.lon);
+
     // Sort: cheapest first. If price is null, push to the end.
     combined.sort((a, b) => {
       if (a.price === null) return 1;
@@ -742,6 +812,8 @@ app.post('/api/recipe/prices', async (req, res) => {
   if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
     return res.status(400).json({ error: "Ingredienser skal angives som et array" });
   }
+
+  const location = parseLocation(req.body.lat, req.body.lon);
   
   // Normalize: support both old string array and new object array format
   const normalizedIngredients = ingredients.map(i => {
@@ -841,8 +913,13 @@ app.post('/api/recipe/prices', async (req, res) => {
     const aggregated = searchResults.map(({ ingredient, results }) => {
       const withPrice = results.filter(r => r.price !== null);
       
+      // Attach distance to nearest store branch when a user location is provided
+      const located = location
+        ? withPrice.map(r => ({ ...r, distanceKm: r.source === 'tjek' ? nearestStoreDistanceKm(r.store, location.lat, location.lon) : null }))
+        : withPrice;
+      
       // Score and sort results by relevance before price
-      const scored = withPrice.map(r => ({
+      const scored = located.map(r => ({
         ...r,
         _score: scoreProductRelevance(r, ingredient)
       })).filter(r => r._score > -9999); // Remove blacklisted items

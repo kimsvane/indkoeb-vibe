@@ -117,7 +117,35 @@
           <select id="sort-select" class="custom-select">
             <option value="price-asc">Billigste pris (standard)</option>
             <option value="unitprice-asc">Laveste enhedspris (kr/l, kr/kg)</option>
+            <option value="distance-asc">Nærmeste butik</option>
           </select>
+        </div>
+
+        <!-- Distance Filter -->
+        <div class="store-filter-container">
+          <label for="distance-select">Afstand:</label>
+          <select id="distance-select" class="custom-select">
+            <option value="all">Alle afstande</option>
+            <option value="2">Inden for 2 km</option>
+            <option value="5">Inden for 5 km</option>
+            <option value="10">Inden for 10 km</option>
+            <option value="15">Inden for 15 km</option>
+            <option value="20">Inden for 20 km</option>
+            <option value="50">Inden for 50 km</option>
+          </select>
+        </div>
+
+        <!-- Location Control -->
+        <div class="location-container">
+          <button type="button" id="locate-btn" class="toggle-btn">
+            <span class="dot"></span>
+            Min placering
+          </button>
+          <div class="postal-group">
+            <input type="text" id="postal-input" class="postal-input" placeholder="Postnr." inputmode="numeric" maxlength="4" aria-label="Postnummer">
+            <button type="button" id="postal-apply-btn" class="mini-btn" title="Brug postnummer">OK</button>
+          </div>
+          <span id="location-status" class="location-status"></span>
         </div>
       </div>
     </section>

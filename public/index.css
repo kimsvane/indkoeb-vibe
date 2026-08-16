@@ -295,6 +295,73 @@ body {
 .custom-select:hover, .custom-select:focus { border-color: var(--accent-primary); }
 .custom-select option { background: var(--bg-elevated); }
 
+/* --- Location & Distance Controls --- */
+.location-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.postal-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.postal-input {
+  width: 74px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color var(--transition-std);
+}
+.postal-input:hover, .postal-input:focus { border-color: var(--accent-primary); }
+
+.mini-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: all var(--transition-std);
+}
+.mini-btn:hover { border-color: var(--accent-primary); color: var(--text-primary); }
+
+.location-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 260px;
+  line-height: 1.3;
+}
+.location-status.busy { color: var(--accent-secondary); }
+.location-status.warn { color: #e0a83c; }
+
+/* Distance chip on product cards */
+.distance-chip {
+  display: inline-block;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.delivery-chip {
+  color: var(--accent-secondary);
+  border-color: rgba(124, 111, 205, 0.3);
+  background: rgba(124, 111, 205, 0.07);
+}
+
 /* --- Stats Section --- */
 .stats-section {
   display: grid;

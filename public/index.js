@@ -22,6 +22,26 @@ const toggleOffer = document.getElementById('toggle-offer');
 const storeSelect = document.getElementById('store-select');
 const categorySelect = document.getElementById('category-select');
 const sortSelect = document.getElementById('sort-select');
+const distanceSelect = document.getElementById('distance-select');
+const locateBtn = document.getElementById('locate-btn');
+const postalInput = document.getElementById('postal-input');
+const postalApplyBtn = document.getElementById('postal-apply-btn');
+const locationStatus = document.getElementById('location-status');
+
+// --- Location state ---
+let userLocation = null; // { lat, lon, label }
+let maxDistanceKm = null; // number or null
+let locationResolvers = [];
+
+// Expose shared state to recipe.js and other modules
+function getLocationFilterState() {
+  return {
+    location: userLocation,
+    maxKm: maxDistanceKm,
+    distanceActive: maxDistanceKm != null
+  };
+}
+window.getLocationFilterState = getLocationFilterState;
 
 // --- Quick Search Chips ---
 document.querySelectorAll('.search-chip').forEach(chip => {
@@ -54,6 +74,104 @@ toggleOffer.addEventListener('click', () => toggleFilter(toggleOffer));
 storeSelect.addEventListener('change', applyFiltersAndSort);
 categorySelect.addEventListener('change', applyFiltersAndSort);
 sortSelect.addEventListener('change', applyFiltersAndSort);
+distanceSelect.addEventListener('change', onDistanceChange);
+locateBtn.addEventListener('click', onLocateClick);
+postalApplyBtn.addEventListener('click', applyPostalCode);
+postalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    applyPostalCode();
+  }
+});
+
+function onDistanceChange() {
+  const raw = distanceSelect.value;
+  maxDistanceKm = raw === 'all' ? null : parseFloat(raw);
+  if (maxDistanceKm != null && !userLocation) {
+    setLocationStatus('Vælg en placering (📍 eller postnummer) for at filtrere på afstand.', 'warn');
+    applyFiltersAndSort();
+    notifyLocationChange();
+    return;
+  }
+  setLocationStatus(userLocation ? `Viser kun butikker inden for ${maxDistanceKm} km af ${userLocation.label}` : '');
+  applyFiltersAndSort();
+  notifyLocationChange();
+}
+
+function notifyLocationChange() {
+  locationResolvers.forEach(cb => cb());
+}
+
+window.onLocationChange = (cb) => {
+  locationResolvers.push(cb);
+};
+
+async function onLocateClick() {
+  if (!navigator.geolocation) {
+    setLocationStatus('Geolocation understøttes ikke. Indtast postnummer i stedet.', 'warn');
+    return;
+  }
+  setLocationStatus('Finder din placering...', 'busy');
+  locateBtn.disabled = true;
+  try {
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 300000
+      });
+    });
+    userLocation = {
+      lat: pos.coords.latitude,
+      lon: pos.coords.longitude,
+      label: 'din placering'
+    };
+    locateBtn.dataset.active = 'true';
+    setLocationStatus(`Placering sat. Nærmeste butikker inden for ${maxDistanceKm != null ? maxDistanceKm + ' km' : 'valgt afstand'}.`);
+    applyFiltersAndSort();
+    notifyLocationChange();
+  } catch (err) {
+    setLocationStatus('Kunne ikke finde din placering. Indtast postnummer i stedet.', 'warn');
+  } finally {
+    locateBtn.disabled = false;
+  }
+}
+
+async function applyPostalCode() {
+  const nr = postalInput.value.trim();
+  if (!/^\d{4}$/.test(nr)) {
+    setLocationStatus('Indtast et gyldigt 4-cifret postnummer.', 'warn');
+    return;
+  }
+  setLocationStatus('Slår postnummer op...', 'busy');
+  try {
+    const res = await fetch(`https://api.dataforsyningen.dk/postnumre/${nr}`);
+    if (!res.ok) throw new Error('Ugyldigt postnummer');
+    const data = await res.json();
+    let lon, lat;
+    if (Array.isArray(data.visueltcenter)) {
+      [lon, lat] = data.visueltcenter;
+    } else if (Array.isArray(data.bbox)) {
+      const [x1, y1, x2, y2] = data.bbox;
+      lon = x1 + (x2 - x1) / 2;
+      lat = y1 + (y2 - y1) / 2;
+    }
+    if (lat == null || lon == null) throw new Error('Ingen koordinater');
+    userLocation = { lat, lon, label: `${data.navn} (${nr})` };
+    locateBtn.dataset.active = 'true';
+    setLocationStatus(`Placering sat: ${userLocation.label}.`);
+    applyFiltersAndSort();
+    notifyLocationChange();
+  } catch (err) {
+    setLocationStatus('Kunne ikke finde postnummeret. Prøv igen.', 'warn');
+  }
+}
+
+function setLocationStatus(text, state = '') {
+  locationStatus.textContent = text;
+  locationStatus.className = 'location-status';
+  if (state) locationStatus.classList.add(state);
+}
 
 // --- Keyboard Shortcut: Cmd/Ctrl+K to focus search ---
 document.addEventListener('keydown', (e) => {
@@ -79,7 +197,11 @@ async function handleSearch() {
   showLoading();
 
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    let url = `/api/search?q=${encodeURIComponent(query)}`;
+    if (userLocation) {
+      url += `&lat=${userLocation.lat}&lon=${userLocation.lon}`;
+    }
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`Server fejl: ${res.status}`);
     const data = await res.json();
 
@@ -137,12 +259,30 @@ function applyFiltersAndSort() {
     results = results.filter(item => item.category === selectedCategory);
   }
 
+  // Filter: Distance (max km from user location)
+  if (maxDistanceKm != null && userLocation) {
+    results = results.filter(item => {
+      // nemlig.com leverer - altid inden for afstand
+      if (item.source === 'nemlig') return true;
+      return item.distanceKm != null && item.distanceKm <= maxDistanceKm;
+    });
+  }
+
   // Sort
   if (sortMode === 'unitprice-asc') {
     results.sort((a, b) => {
       const aU = a.pricePerUnit ?? Infinity;
       const bU = b.pricePerUnit ?? Infinity;
       return aU - bU;
+    });
+  } else if (sortMode === 'distance-asc') {
+    results.sort((a, b) => {
+      const aD = a.source === 'nemlig' ? 0 : (a.distanceKm ?? Infinity);
+      const bD = b.source === 'nemlig' ? 0 : (b.distanceKm ?? Infinity);
+      if (aD !== bD) return aD - bD;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return a.price - b.price;
     });
   } else {
     // Default: price-asc
@@ -314,6 +454,11 @@ function createProductCard(item, isCheapest) {
   // Source label
   const sourceLabel = item.source === 'tjek' ? 'Tilbudsavis' : 'nemlig.com';
 
+  // Distance label
+  const distanceDisplay = item.source === 'nemlig'
+    ? `<span class="distance-chip delivery-chip">🛒 Levering</span>`
+    : (item.distanceKm != null ? `<span class="distance-chip">📍 ${formatDistance(item.distanceKm)}</span>` : '');
+
   card.innerHTML = `
     <div class="card-badge-row">${badges}</div>
 
@@ -328,6 +473,7 @@ function createProductCard(item, isCheapest) {
       <div class="card-meta-row">
         <span class="source-chip">${sourceLabel}</span>
         ${categoryTag ? `<span class="category-chip">${escapeHtml(categoryTag)}</span>` : ''}
+        ${distanceDisplay}
       </div>
     </div>
 
@@ -354,6 +500,12 @@ let idx_delay = 0;
 function formatPrice(price) {
   if (price === null || price === undefined) return '–';
   return price.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
+}
+
+function formatDistance(km) {
+  if (km == null) return '';
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toLocaleString('da-DK', { maximumFractionDigits: 1 })} km`;
 }
 
 function noImageSvg() {
