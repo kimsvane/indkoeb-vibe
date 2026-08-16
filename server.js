@@ -815,8 +815,10 @@ Følg disse regler strengt:
 1. Hvert objekt skal have præcis disse felter:
    - "name": Råvarens navn på DANSK. Fjern mængder/enheder. Bevar formen (f.eks. "fersk kyllingebryst", "hakket oksekød", "flødeost").
    - "searchQuery": En kort, præcis søgestreng til en supermarkeds-søgemaskine. Brug det vigtigste ord + form, f.eks. "kyllingebryst fersk", "hakket oksekød", "piskefløde". Hvis det er kød eller fisk, der skal bruges fersk/frossen i en varm ret, skal du ALTID tilføje ordet "fersk" (f.eks. "kyllingebryst fersk" eller "laks fersk") for at undgå at søgemaskinen finder pålæg. ALDRIG inkluder mængder.
-   - "category": Én af disse kategorier: "kød", "fisk", "mejeri", "grønt", "tørvarer", "brød", "konserves", "krydderier", "frost", "drikkevarer", "andet".
-   - "excludeTerms": JSON-array med ord der IKKE må optræde i produktnavnet, mærket eller kategorien. Brug dette til at undgå forkerte produktformer (f.eks. pålæg, skiver, skåret, stegt, dåse). Eksempler: For fersk "kyllingebryst" skal du ekskludere ["pålæg", "pålækker", "skiver", "skåret", "strimler", "nuggets", "hakket", "dåse", "stegt"]. For "oksekød" i en steg-ret, ekskluder ["pålæg", "leverpostej", "hakket"]. For "piskefløde", ekskluder ["flødeost", "is", "creme fraiche"]. Lad listen være tom [] hvis der ikke er risiko for forveksling.
+    - "category": Én af disse kategorier: "kød", "fisk", "mejeri", "grønt", "tørvarer", "brød", "konserves", "krydderier", "frost", "drikkevarer", "andet".
+    - "excludeTerms": JSON-array med ord der IKKE må optræde i produktnavnet, mærket eller kategorien. Brug dette til at undgå forkerte produktformer (f.eks. pålæg, skiver, skåret, stegt, dåse). Eksempler: For "kyllingebryst" ekskluder ["pålæg", "pålækker", "skiver", "skåret", "strimler", "nuggets", "hakket", "dåse", "stegt"]. For "oksekød" i en steg-ret, ekskluder ["pålæg", "leverpostej", "hakket"]. For "piskefløde", ekskluder ["flødeost", "is", "creme fraiche"]. Lad listen være tom [] hvis der ikke er risiko for forveksling.
+    - "amount": Den mængde af råvaren opskriften bruger, SOM TAL (f.eks. 200, 1.5, 6, 0.5). Hvis mængden ikke står eksplicit i teksten (f.eks. "smag til", "efter behov"), sæt til null.
+    - "unit": Enheden SOM STRENG, en af: "g", "kg", "ml", "l", "stk", "bundt", "dåse", "pose", "spsk", "tsk", "portion" eller null hvis ukendt. Brug "g"/"kg" for vægt, "ml"/"l" for volumen, "stk" for hele styk (f.eks. "2 æg" -> amount 2, unit "stk"). Brug "l" for liter, "ml" for milliliter.
 2. Returner KUN den rå JSON-array. Ingen markdown, ingen forklaringer. Array starter med [ og slutter med ].
 
 Opskriftstekst:
@@ -847,7 +849,9 @@ ${truncatedText}`;
         name: (i.name || '').trim(),
         searchQuery: (i.searchQuery || i.name || '').trim(),
         category: (i.category || 'andet').trim(),
-        excludeTerms: Array.isArray(i.excludeTerms) ? i.excludeTerms.map(t => t.toLowerCase()) : []
+        excludeTerms: Array.isArray(i.excludeTerms) ? i.excludeTerms.map(t => t.toLowerCase()) : [],
+        amount: (i.amount != null && !isNaN(Number(i.amount))) ? Number(i.amount) : null,
+        unit: (i.unit || null)
       };
     }).filter(i => i.name);
     
@@ -1095,6 +1099,8 @@ app.post('/api/recipe/prices', async (req, res) => {
         ingredient: ingredient.name, // Send back just the name for the frontend
         searchQuery: ingredient.searchQuery,
         category: ingredient.category,
+        amount: ingredient.amount ?? null,
+        unit: ingredient.unit ?? null,
         bestMatch,
         organicOption,
         alternatives: scored.slice(0, 5)

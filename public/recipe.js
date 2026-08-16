@@ -8,6 +8,8 @@
 let recipeIngredients = [];
 let recipeResults = null;
 let organicMode = false;
+let selectedChains = null; // null = alle butikker; ellers et Set af valgte butiksnavne
+let availableChains = [];
 
 // --- DOM References ---
 const tabSearchBtn = document.getElementById('tab-btn-search');
@@ -108,6 +110,24 @@ function setupRecipeListeners() {
 
   // Copy list button
   recipeCopyListBtn.addEventListener('click', copyShoppingListToClipboard);
+
+  // Chain multi-select filter
+  const chainBtn = document.getElementById('chain-filter-btn');
+  if (chainBtn) {
+    chainBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleChainDropdown();
+    });
+  }
+  document.addEventListener('click', (e) => {
+    const dropdown = document.getElementById('chain-dropdown');
+    const btn = document.getElementById('chain-filter-btn');
+    if (!dropdown || !btn) return;
+    if (!dropdown.classList.contains('hidden') &&
+        !dropdown.contains(e.target) && !btn.contains(e.target)) {
+      dropdown.classList.add('hidden');
+    }
+  });
 }
 
 // --- Scanning Flow ---
@@ -229,23 +249,30 @@ function getRecipeView() {
   const state = window.getLocationFilterState();
   const maxKm = state.maxKm;
   const loc = state.location;
+  const distanceActive = !(maxKm == null || !loc);
+  const chainEmpty = !selectedChains || selectedChains.size === 0;
 
-  // No active distance filter -> show full results as-is
-  if (maxKm == null || !loc) return recipeResults;
+  // Ingen aktive filtre -> returnér rå resultater
+  if (!distanceActive && chainEmpty) return recipeResults;
 
-  const inRange = (r) => !r || r.source === 'nemlig' || (r.distanceKm != null && r.distanceKm <= maxKm);
+  const inRange = (r) =>
+    !r ||
+    r.source === 'nemlig' ||
+    !distanceActive ||
+    (r.distanceKm != null && r.distanceKm <= maxKm);
+
+  const inChain = (r) => chainEmpty || selectedChains.has(r.store);
 
   const ingredients = recipeResults.ingredients.map(item => {
-    const alternatives = (item.alternatives || []).filter(inRange);
-    const bestMatch = inRange(item.bestMatch) ? item.bestMatch : alternatives[0] || null;
-    let organicOption = inRange(item.organicOption) ? item.organicOption : null;
-    if (!organicOption) {
-      organicOption = alternatives.find(r => r.isOrganic) || null;
-    }
-    return { ...item, bestMatch, organicOption, alternatives };
+    const candidates = [item.bestMatch, ...(item.alternatives || [])].filter(Boolean);
+    const allowed = candidates.filter(r => inRange(r) && inChain(r));
+    const match = allowed[0] || null;
+    const organicOption = allowed.find(r => r.isOrganic) || null;
+    const alternatives = allowed.slice(0, 5);
+    return { ...item, bestMatch: match, organicOption, alternatives };
   });
 
-  // Recompute summary based on in-range matches only
+  // Genberegn opsummering ud fra de tilladte matches
   let matchedCount = 0;
   const storeCount = {};
   ingredients.forEach(item => {
@@ -322,6 +349,7 @@ function renderRecipeResults() {
   recipeRecommendedStore.textContent = sum.recommendedStore;
   recipeStoreCoverage.textContent = `Dækker ${sum.storeMatches} ud af ${sum.totalCount} varer`;
 
+  populateChainFilter();
   renderIngredientsGrid(view);
   recipeResultsSection.classList.remove('hidden');
 }
@@ -362,6 +390,11 @@ function renderIngredientsGrid(view = getRecipeView()) {
         ? `<span class="distance-chip delivery-chip">🛒 Levering</span>`
         : (match.distanceKm != null ? `<span class="distance-chip">📍 ${formatDistance(match.distanceKm)}</span>` : '');
 
+      const leftover = computeLeftover(item, match);
+      const leftoverHtml = leftover
+        ? `<div class="leftover-chip">📦 Pakke ${escapeHtml(leftover.packageText)} · brugt ${escapeHtml(leftover.needText)} · til overs: <b>${escapeHtml(leftover.leftoverText || 'køb mere')}</b></div>`
+        : '';
+
       card.innerHTML = `
         <div class="card-header">
           <span class="ingredient-name">${escapeHtml(item.ingredient)}</span>
@@ -377,6 +410,7 @@ function renderIngredientsGrid(view = getRecipeView()) {
               ${distanceInfo}
             </div>
           </div>
+          ${leftoverHtml}
         </div>
         <div class="card-footer-recipe">
           <div class="price-section-recipe">
@@ -408,14 +442,18 @@ function copyShoppingListToClipboard() {
   view.ingredients.forEach(item => {
     const match = (organicMode && item.organicOption) ? item.organicOption : item.bestMatch;
     
-    if (match) {
-      const details = [match.brand, match.size].filter(Boolean).join(', ');
-      const organicText = match.isOrganic ? ' (Øko)' : '';
-      const offerText = match.isOffer ? ' (Tilbud!)' : '';
-      text += `- [ ] ${item.ingredient.toUpperCase()}:\n`;
-      text += `      Valgt: ${match.name}${organicText}${offerText}\n`;
-      text += `      Butik: ${match.store} | Pris: ${formatPrice(match.price)} (${details})\n\n`;
-    } else {
+     if (match) {
+       const details = [match.brand, match.size].filter(Boolean).join(', ');
+       const organicText = match.isOrganic ? ' (Øko)' : '';
+       const offerText = match.isOffer ? ' (Tilbud!)' : '';
+       const leftover = computeLeftover(item, match);
+       const leftoverText = leftover
+         ? ` | Køb ${leftover.packageText}, brugt ${leftover.needText}, til overs ${leftover.leftoverText || 'køb mere'}`
+         : '';
+       text += `- [ ] ${item.ingredient.toUpperCase()}:\n`;
+       text += `      Valgt: ${match.name}${organicText}${offerText}\n`;
+       text += `      Butik: ${match.store} | Pris: ${formatPrice(match.price)} (${details})${leftoverText}\n\n`;
+     } else {
       text += `- [ ] [MANGLER MATCH] ${item.ingredient.toUpperCase()}: (Ingen varer fundet i butikkerne)\n\n`;
     }
   });
@@ -431,6 +469,160 @@ function copyShoppingListToClipboard() {
     console.error('Fejl ved kopiering:', err);
     alert('Kunne ikke kopiere listen automatisk. Se konsollen.');
   });
+}
+
+// --- Mængde / "til overs" hjælpere ---
+
+// Parser en størrelsesstreng ("1 kg", "2 x 500 g", "1000 ml", "6 stk") til
+// kanonisk { value, dimension } hvor dimension er 'mass' (g), 'volume' (ml)
+// eller 'count' (stk). Returnerer null hvis ikke parses.
+function parsePackageSize(str) {
+  if (!str) return null;
+  let s = String(str).toLowerCase().replace(',', '.').replace(/\s+/g, ' ').trim();
+
+  // multiplikator f.eks. "2 x 500 g"
+  const multMatch = s.match(/^(\d+(?:\.\d+)?)\s*[x×]\s*/);
+  if (multMatch) {
+    s = s.slice(multMatch[0].length);
+  }
+  const multiplier = multMatch ? parseFloat(multMatch[1]) : 1;
+
+  const unitMap = {
+    'kg': { dim: 'mass', factor: 1000 },
+    'g': { dim: 'mass', factor: 1 },
+    'l': { dim: 'volume', factor: 1000 },
+    'liter': { dim: 'volume', factor: 1000 },
+    'dl': { dim: 'volume', factor: 100 },
+    'cl': { dim: 'volume', factor: 10 },
+    'ml': { dim: 'volume', factor: 1 },
+    'stk': { dim: 'count', factor: 1 },
+    'styks': { dim: 'count', factor: 1 }
+  };
+
+  const m = s.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|liter|dl|cl|ml|stk|styks)\b/);
+  if (!m) return null;
+  const u = unitMap[m[2]];
+  if (!u) return null;
+  return { value: parseFloat(m[1]) * multiplier * u.factor, dimension: u.dim };
+}
+
+// Opskriftens nødvendige mængde (amount + unit) til kanonisk form.
+function recipeQuantityToCanonical(amount, unit) {
+  if (amount == null || !unit) return null;
+  const unitMap = {
+    'kg': ['mass', 1000], 'g': ['mass', 1],
+    'l': ['volume', 1000], 'liter': ['volume', 1000],
+    'dl': ['volume', 100], 'cl': ['volume', 10], 'ml': ['volume', 1],
+    'stk': ['count', 1], 'styks': ['count', 1]
+  };
+  const u = unitMap[String(unit).toLowerCase()];
+  if (!u) return null;
+  return { value: Number(amount) * u[1], dimension: u[0] };
+}
+
+// Pæn formatering af en kanonisk værdi.
+function formatQuantity(value, dimension) {
+  if (value == null) return '';
+  if (dimension === 'mass') {
+    return value >= 1000
+      ? `${(value / 1000).toLocaleString('da-DK', { maximumFractionDigits: 2 })} kg`
+      : `${Math.round(value)} g`;
+  }
+  if (dimension === 'volume') {
+    return value >= 1000
+      ? `${(value / 1000).toLocaleString('da-DK', { maximumFractionDigits: 2 })} l`
+      : `${Math.round(value)} ml`;
+  }
+  if (dimension === 'count') {
+    return `${Math.round(value)} stk`;
+  }
+  return String(value);
+}
+
+// Beregner hvor meget der er til overs når man køber den valgte pakke.
+// Returnerer null hvis det ikke kan beregnes (f.eks. ukendt størrelse eller
+// uforenelige enheder).
+function computeLeftover(item, match) {
+  if (!match || !match.size) return null;
+  if (item.amount == null || !item.unit) return null;
+
+  const pkg = parsePackageSize(match.size);
+  const need = recipeQuantityToCanonical(item.amount, item.unit);
+  if (!pkg || !need) return null;
+
+  // Kun sammenlignelig ved samme dimension; løse count-enheder (bundt/dåse)
+  // sammenlignes ikke med hinanden.
+  if (pkg.dimension !== need.dimension) return null;
+  if (pkg.dimension === 'count' && String(item.unit).toLowerCase() !== 'stk') return null;
+
+  const leftover = pkg.value - need.value;
+  return {
+    packageText: formatQuantity(pkg.value, pkg.dimension),
+    needText: formatQuantity(need.value, pkg.dimension),
+    leftover,
+    leftoverText: leftover >= 0 ? formatQuantity(leftover, pkg.dimension) : null
+  };
+}
+
+// --- Butiksfilter (multivalg) ---
+
+function collectChains(results) {
+  const set = new Set();
+  (results.ingredients || []).forEach(item => {
+    [item.bestMatch, ...(item.alternatives || []), item.organicOption].forEach(r => {
+      if (r && r.store) set.add(r.store);
+    });
+  });
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'da'));
+}
+
+function populateChainFilter() {
+  if (!recipeResults) return;
+  availableChains = collectChains(recipeResults);
+  const dropdown = document.getElementById('chain-dropdown');
+  if (!dropdown) return;
+  dropdown.innerHTML = '';
+
+  availableChains.forEach(chain => {
+    const label = document.createElement('label');
+    label.className = 'chain-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = chain;
+    cb.checked = !selectedChains || selectedChains.has(chain);
+    cb.addEventListener('change', onChainFilterChange);
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + chain));
+    dropdown.appendChild(label);
+  });
+
+  updateChainButtonLabel();
+}
+
+function updateChainButtonLabel() {
+  const btn = document.getElementById('chain-filter-btn');
+  if (!btn) return;
+  const total = availableChains.length;
+  const sel = selectedChains ? selectedChains.size : total;
+  const label = btn.querySelector('.chain-count');
+  if (!label) return;
+  label.textContent = (!selectedChains || sel === total)
+    ? 'Alle butikker'
+    : `${sel} af ${total} butikker`;
+}
+
+function onChainFilterChange() {
+  const checkboxes = document.querySelectorAll('#chain-dropdown input[type="checkbox"]');
+  const sel = new Set();
+  checkboxes.forEach(cb => { if (cb.checked) sel.add(cb.value); });
+  selectedChains = sel.size === 0 ? null : sel;
+  updateChainButtonLabel();
+  renderRecipeResults();
+}
+
+function toggleChainDropdown() {
+  const dropdown = document.getElementById('chain-dropdown');
+  if (dropdown) dropdown.classList.toggle('hidden');
 }
 
 // --- Utilities ---

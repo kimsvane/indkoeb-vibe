@@ -1401,3 +1401,83 @@ body {
   .results-grid { grid-template-columns: 1fr; }
 }
 
+/* --- Recipe Chain Multi-select Filter --- */
+.chain-filter {
+  position: relative;
+}
+
+.chain-filter .toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chain-caret {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+.chain-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-glow);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chain-dropdown.hidden {
+  display: none;
+}
+
+.chain-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.chain-option:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.chain-option input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* --- Recipe Leftover ("til overs") chip --- */
+.leftover-chip {
+  margin-top: 10px;
+  padding: 7px 10px;
+  background: var(--green-bg);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--green-organic);
+  line-height: 1.4;
+}
+
+.leftover-chip b {
+  color: var(--text-primary);
+}
+
+
