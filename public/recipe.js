@@ -43,7 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (window.onLocationChange) {
     window.onLocationChange(() => {
       if (recipeResults && !recipeResultsSection.classList.contains('hidden')) {
-        renderRecipeResults();
+        // Genhent priser med den nye placering så afstande beregnes korrekt
+        refreshRecipePrices();
       }
     });
   }
@@ -282,6 +283,30 @@ function getRecipeView() {
       storeMatches: maxMatches
     }
   };
+}
+
+// Genhenter opskrift-priser med den aktuelle placering (så afstande beregnes
+// korrekt når brugeren ændrer placering efter analysen).
+async function refreshRecipePrices() {
+  if (!recipeIngredients || recipeIngredients.length === 0) {
+    renderRecipeResults();
+    return;
+  }
+  try {
+    const priceRes = await fetch('/api/recipe/prices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPricePayload(recipeIngredients))
+    });
+    if (!priceRes.ok) {
+      renderRecipeResults();
+      return;
+    }
+    recipeResults = await priceRes.json();
+    renderRecipeResults();
+  } catch {
+    renderRecipeResults();
+  }
 }
 
 function renderRecipeResults() {

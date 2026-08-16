@@ -128,8 +128,8 @@ async function onLocateClick() {
     };
     locateBtn.dataset.active = 'true';
     setLocationStatus(`Placering sat. Nærmeste butikker inden for ${maxDistanceKm != null ? maxDistanceKm + ' km' : 'valgt afstand'}.`);
-    applyFiltersAndSort();
-    notifyLocationChange();
+    if (currentQuery) refreshSearch();
+    else { applyFiltersAndSort(); notifyLocationChange(); }
   } catch (err) {
     setLocationStatus('Kunne ikke finde din placering. Indtast postnummer i stedet.', 'warn');
   } finally {
@@ -160,8 +160,8 @@ async function applyPostalCode() {
     userLocation = { lat, lon, label: `${data.navn} (${nr})` };
     locateBtn.dataset.active = 'true';
     setLocationStatus(`Placering sat: ${userLocation.label}.`);
-    applyFiltersAndSort();
-    notifyLocationChange();
+    if (currentQuery) refreshSearch();
+    else { applyFiltersAndSort(); notifyLocationChange(); }
   } catch (err) {
     setLocationStatus('Kunne ikke finde postnummeret. Prøv igen.', 'warn');
   }
@@ -222,6 +222,13 @@ async function handleSearch() {
     console.error('Search error:', err);
     showError(err.message);
   }
+}
+
+// Genhenter søgningen med den aktuelle placering, så afstande (distanceKm)
+// beregnes på serveren. Kaldes når brugerens placering ændres.
+function refreshSearch() {
+  if (!currentQuery) return;
+  handleSearch();
 }
 
 function toggleFilter(btn) {
