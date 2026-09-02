@@ -1496,3 +1496,156 @@ body {
 }
 
 
+
+/* ==========================================================
+   Vareovervågning (Tasks) & Notifications
+   ========================================================= */
+
+.task-controls-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+.task-controls-row .custom-select {
+  flex: 0 0 auto;
+  min-width: 160px;
+}
+.task-list-section {
+  margin-top: 20px;
+}
+.task-list {
+  display: grid;
+  gap: 12px;
+}
+.task-card {
+  background: #fff;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.task-card.task-disabled {
+  opacity: 0.55;
+}
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.task-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-query {
+  font-weight: 600;
+  font-size: 1rem;
+  text-transform: capitalize;
+}
+.task-freq {
+  font-size: 0.78rem;
+  color: var(--text-secondary, #6b7280);
+}
+.task-actions {
+  display: flex;
+  gap: 6px;
+}
+.task-btn {
+  border: 1px solid var(--border-color, #e5e7eb);
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.15s;
+}
+.task-btn:hover {
+  background: #eef2ff;
+}
+.task-delete-btn:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.task-card-status {
+  margin-top: 10px;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+/* Notification services */
+.notifications-config {
+  margin-top: 28px;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+  padding-top: 20px;
+}
+.settings-divider-title {
+  margin-bottom: 6px;
+}
+.notification-service {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.notification-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.notification-label {
+  font-weight: 600;
+  flex: 1;
+}
+.notification-fields {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+.form-group-row {
+  display: flex;
+  gap: 12px;
+}
+.form-group.half {
+  flex: 1;
+}
+
+/* Toggle switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #cbd5e1;
+  border-radius: 24px;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--accent-primary, #6366f1);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}

@@ -85,8 +85,10 @@ let serverConfiguredProviders = [];
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
   setupEventListeners();
+  setupNotificationListeners();
   await detectServerConfig(); // Check server for globally configured API keys
   updateUIFromConfig();
+  await loadNotificationConfig();
 });
 
 // Detect which LLM providers are globally configured via server env vars
@@ -296,9 +298,137 @@ function setupEventListeners() {
   });
 }
 
+// --- Notifications Configuration ---
+let notifConfig = { services: {} };
+
+async function loadNotificationConfig() {
+  try {
+    const res = await fetch('/api/notifications');
+    if (!res.ok) throw new Error('Fejl');
+    notifConfig = await res.json();
+    applyNotificationConfig();
+  } catch (err) {
+    console.warn('[Settings] Kunne ikke hente notifikationskonfiguration:', err.message);
+  }
+}
+
+function applyNotificationConfig() {
+  const s = notifConfig.services || {};
+  const push = s.pushover || {};
+  const email = s.email || {};
+  const ha = s.homeassistant || {};
+
+  const po = document.getElementById('notif-pushover-enabled');
+  const e = document.getElementById('notif-email-enabled');
+  const h = document.getElementById('notif-ha-enabled');
+  if (po) po.checked = !!push.enabled;
+  if (e) e.checked = !!email.enabled;
+  if (h) h.checked = !!ha.enabled;
+
+  if (push.appToken) document.getElementById('notif-pushover-token').value = push.appToken;
+  if (push.userKey) document.getElementById('notif-pushover-user').value = push.userKey;
+
+  if (email.smtpHost) document.getElementById('notif-email-host').value = email.smtpHost;
+  if (email.smtpPort) document.getElementById('notif-email-port').value = email.smtpPort;
+  if (email.smtpUser) document.getElementById('notif-email-user').value = email.smtpUser;
+  if (email.smtpPass && email.smtpPass !== '***') document.getElementById('notif-email-pass').value = email.smtpPass;
+  if (email.toEmail) document.getElementById('notif-email-to').value = email.toEmail;
+  if (email.fromEmail) document.getElementById('notif-email-from').value = email.fromEmail;
+
+  if (ha.baseUrl) document.getElementById('notif-ha-url').value = ha.baseUrl;
+  if (ha.webhookId && ha.webhookId !== '***') document.getElementById('notif-ha-webhook').value = ha.webhookId;
+
+  toggleNotifFields('pushover');
+  toggleNotifFields('email');
+  toggleNotifFields('homeassistant');
+}
+
+function toggleNotifFields(service) {
+  const map = { pushover: 'notif-pushover-enabled', email: 'notif-email-enabled', homeassistant: 'notif-ha-enabled' };
+  const el = document.getElementById(map[service]);
+  if (!el) return;
+  const fieldsMap = { pushover: 'notif-pushover-fields', email: 'notif-email-fields', homeassistant: 'notif-ha-fields' };
+  const fields = document.getElementById(fieldsMap[service]);
+  if (fields) fields.classList.toggle('hidden', !el.checked);
+}
+
+function setupNotificationListeners() {
+  document.querySelectorAll('.notif-toggle').forEach(input => {
+    input.addEventListener('change', () => {
+      const map = { 'notif-pushover-enabled': 'pushover', 'notif-email-enabled': 'email', 'notif-ha-enabled': 'homeassistant' };
+      toggleNotifFields(map[input.id]);
+    });
+  });
+
+  const saveBtn = document.getElementById('notif-save-btn');
+  if (saveBtn) saveBtn.addEventListener('click', saveNotificationConfig);
+
+  document.querySelectorAll('.notification-test-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Sender...';
+      try {
+        await saveNotificationConfig(true);
+        const res = await fetch('/api/notifications/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service: btn.dataset.service })
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? 'Sendt ✓' : 'Fejl ✗';
+      } catch (err) {
+        btn.textContent = 'Fejl ✗';
+      } finally {
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2500);
+      }
+    });
+  });
+}
+
+function collectNotificationConfig() {
+  return {
+    services: {
+      pushover: {
+        enabled: document.getElementById('notif-pushover-enabled').checked,
+        appToken: document.getElementById('notif-pushover-token').value.trim(),
+        userKey: document.getElementById('notif-pushover-user').value.trim()
+      },
+      email: {
+        enabled: document.getElementById('notif-email-enabled').checked,
+        smtpHost: document.getElementById('notif-email-host').value.trim(),
+        smtpPort: parseInt(document.getElementById('notif-email-port').value) || 587,
+        smtpUser: document.getElementById('notif-email-user').value.trim(),
+        smtpPass: document.getElementById('notif-email-pass').value,
+        toEmail: document.getElementById('notif-email-to').value.trim(),
+        fromEmail: document.getElementById('notif-email-from').value.trim()
+      },
+      homeassistant: {
+        enabled: document.getElementById('notif-ha-enabled').checked,
+        baseUrl: document.getElementById('notif-ha-url').value.trim(),
+        webhookId: document.getElementById('notif-ha-webhook').value.trim()
+      }
+    }
+  };
+}
+
+async function saveNotificationConfig(silent = false) {
+  const payload = collectNotificationConfig();
+  try {
+    const res = await fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Fejl');
+    if (!silent) alert('Notifikationsindstillinger gemt!');
+  } catch (err) {
+    if (!silent) alert('Kunne ikke gemme notifikationsindstillinger');
+  }
+}
+
 // --- Connection Testing ---
-async function testConnection() {
-  const provider = settingsProvider.value;
+async function testConnection() {  const provider = settingsProvider.value;
   const body = { provider };
 
   if (provider !== 'ollama') {

@@ -2,8 +2,9 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import dotenv from 'dotenv';
+import nodemailer from 'nodemailer';
 import { callLLM } from './lib/llm.js';
 
 dotenv.config();
@@ -1167,6 +1168,361 @@ app.post('/api/recipe/prices', async (req, res) => {
   } catch (error) {
     console.error("[Recipe Prices] Processing error:", error);
     res.status(500).json({ error: "Fejl under prissammenligning for opskriften." });
+  }
+});
+
+// --- Data Persistence (JSON files in data/) ---
+const DATA_DIR = path.join(__dirname, 'data');
+if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+function readJsonFile(filename, fallback = {}) {
+  const filepath = path.join(DATA_DIR, filename);
+  try {
+    return JSON.parse(readFileSync(filepath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filename, data) {
+  writeFileSync(path.join(DATA_DIR, filename), JSON.stringify(data, null, 2), 'utf8');
+}
+
+// --- Tasks (Vareovervågning) ---
+let tasksData = readJsonFile('tasks.json', { tasks: [] });
+if (!Array.isArray(tasksData.tasks)) tasksData.tasks = [];
+function saveTasks() { writeJsonFile('tasks.json', tasksData); }
+
+// --- Notifications config ---
+let notificationsData = readJsonFile('notifications.json', {
+  services: {
+    pushover: { enabled: false, appToken: '', userKey: '' },
+    email: { enabled: false, smtpHost: '', smtpPort: 587, smtpUser: '', smtpPass: '', toEmail: '', fromEmail: '' },
+    homeassistant: { enabled: false, baseUrl: '', webhookId: '' }
+  }
+});
+function saveNotifications() { writeJsonFile('notifications.json', notificationsData); }
+
+// --- Nodemailer transporter (lazy init) ---
+let emailTransporter = null;
+function getEmailTransporter() {
+  const cfg = notificationsData.services?.email;
+  if (!cfg?.enabled || !cfg.smtpHost) return null;
+  if (!emailTransporter) {
+    emailTransporter = nodemailer.createTransport({
+      host: cfg.smtpHost,
+      port: cfg.smtpPort || 587,
+      secure: (cfg.smtpPort === 465),
+      auth: cfg.smtpUser ? { user: cfg.smtpUser, pass: cfg.smtpPass } : undefined
+    });
+  }
+  return emailTransporter;
+}
+
+function resetEmailTransporter() { emailTransporter = null; }
+
+// --- Notification Services ---
+async function sendPushoverNotification(title, message) {
+  const cfg = notificationsData.services?.pushover;
+  if (!cfg?.enabled || !cfg.appToken || !cfg.userKey) return;
+  try {
+    const res = await fetch('https://api.pushover.net/1/messages.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token: cfg.appToken,
+        user: cfg.userKey,
+        title,
+        message,
+        html: '1'
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[Notify] Pushover fejlede:', res.status, err.errors || err.message || '');
+    } else {
+      console.log('[Notify] Pushover sendt:', title);
+    }
+  } catch (err) {
+    console.error('[Notify] Pushover fejlede:', err.message);
+  }
+}
+
+async function sendEmailNotification(subject, text) {
+  const cfg = notificationsData.services?.email;
+  if (!cfg?.enabled || !cfg.smtpHost || !cfg.toEmail) return;
+  const transporter = getEmailTransporter();
+  if (!transporter) return;
+  try {
+    await transporter.sendMail({
+      from: cfg.fromEmail || cfg.smtpUser,
+      to: cfg.toEmail,
+      subject,
+      text
+    });
+    console.log('[Notify] E-mail sendt:', subject);
+  } catch (err) {
+    console.error('[Notify] E-mail fejlede:', err.message);
+    resetEmailTransporter();
+  }
+}
+
+async function sendHomeAssistantNotification(title, message) {
+  const cfg = notificationsData.services?.homeassistant;
+  if (!cfg?.enabled || !cfg.baseUrl) return;
+  try {
+    const url = cfg.webhookId
+      ? `${cfg.baseUrl.replace(/\/$/, '')}/api/webhook/${cfg.webhookId}`
+      : `${cfg.baseUrl.replace(/\/$/, '')}/api/services/notify/notify`;
+    const body = cfg.webhookId
+      ? { title, message }
+      : { message: `${title}: ${message}`, title };
+    const headers = { 'Content-Type': 'application/json' };
+    if (!cfg.webhookId) {
+      // REST API mode — requires Bearer token in webhookId field (repurposed)
+      headers['Authorization'] = `Bearer ${cfg.webhookId || ''}`;
+    }
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      console.error('[Notify] Home Assistant fejlede:', res.status);
+    } else {
+      console.log('[Notify] Home Assistant sendt:', title);
+    }
+  } catch (err) {
+    console.error('[Notify] Home Assistant fejlede:', err.message);
+  }
+}
+
+async function sendAllNotifications(title, message) {
+  await Promise.allSettled([
+    sendPushoverNotification(title, message),
+    sendEmailNotification(title, message),
+    sendHomeAssistantNotification(title, message)
+  ]);
+}
+
+// --- Scheduler ---
+const FREQ_MS = {
+  daily: 24 * 60 * 60 * 1000,
+  'twice-weekly': 3.5 * 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000
+};
+
+function isTaskDue(task) {
+  if (!task.enabled) return false;
+  const freq = FREQ_MS[task.frequency] || FREQ_MS.weekly;
+  if (!task.lastChecked) return true;
+  return (Date.now() - new Date(task.lastChecked).getTime()) >= freq;
+}
+
+async function runTask(task) {
+  console.log(`[Scheduler] Kører søgning for "${task.query}"...`);
+  try {
+    const nemligItems = [];
+    const tjekItems = [];
+    const shelfItems = [];
+
+    // Fetch nemlig
+    try {
+      await nemligSession.ensureSession();
+      const qp = new URLSearchParams({
+        query: task.query, take: '20', skip: '0', recipeCount: '0',
+        timestamp: nemligSession.timestamp, timeslotUtc: nemligSession.timeslotUtc,
+        deliveryZoneId: nemligSession.deliveryZoneId
+      });
+      const r = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${qp}`, {
+        headers: { ...NEMLIG_DEFAULT_HEADERS, 'X-Correlation-Id': crypto.randomUUID(), Authorization: `Bearer ${nemligSession.bearerToken}` }
+      });
+      const d = await r.json();
+      nemligItems.push(...(d.Products?.Products || []).map(parseNemligProduct));
+    } catch {}
+
+    // Fetch Tjek
+    try {
+      const tp = new URLSearchParams({ query: task.query, country_id: 'DK', limit: '50' });
+      const r = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${tp}`, { headers: { 'User-Agent': 'prisjagt-scheduler/1.0' } });
+      const d = await r.json();
+      tjekItems.push(...d.map(parseTjekProduct));
+    } catch {}
+
+    // Fetch ShelfAtlas
+    try {
+      shelfItems.push(...await fetchShelfAtlas(task.query));
+    } catch {}
+
+    const all = [...nemligItems, ...tjekItems, ...shelfItems].filter(i => i && i.price != null);
+    all.sort((a, b) => a.price - b.price);
+
+    const offerItems = all.filter(i => i.isOffer);
+    const bestMatch = offerItems[0] || all[0] || null;
+
+    task.lastChecked = new Date().toISOString();
+
+    if (bestMatch && bestMatch.isOffer) {
+      const prevBest = task.bestPrice;
+      task.bestPrice = bestMatch.price;
+      task.bestStore = bestMatch.store;
+      task.lastNotified = new Date().toISOString();
+      saveTasks();
+
+      const priceStr = bestMatch.price.toLocaleString('da-DK', { minimumFractionDigits: 2 }) + ' kr';
+      const msg = `${task.query} er på tilbud!\n${bestMatch.name} — ${priceStr} i ${bestMatch.store}${bestMatch.size ? ' (' + bestMatch.size + ')' : ''}`;
+      await sendAllNotifications(`Tilbud: ${task.query}`, msg);
+      console.log(`[Scheduler] Tilbud fundet for "${task.query}": ${priceStr} i ${bestMatch.store}`);
+    } else {
+      task.bestPrice = bestMatch?.price || null;
+      task.bestStore = bestMatch?.store || null;
+      saveTasks();
+      console.log(`[Scheduler] Ingen tilbud for "${task.query}" lige nu.`);
+    }
+  } catch (err) {
+    console.error(`[Scheduler] Fejl for "${task.query}":`, err.message);
+    task.lastChecked = new Date().toISOString();
+    saveTasks();
+  }
+}
+
+async function runScheduler() {
+  const dueTasks = tasksData.tasks.filter(isTaskDue);
+  if (dueTasks.length === 0) return;
+  console.log(`[Scheduler] ${dueTasks.length} opgave(r) er due, kører søgninger...`);
+  for (const task of dueTasks) {
+    await runTask(task);
+    // Small delay between tasks to avoid rate-limiting
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+// Start scheduler: check every 15 minutes
+setInterval(runScheduler, 15 * 60 * 1000);
+console.log('[Scheduler] Prisovervågningsscheduler startet (hvert 15. minut)');
+
+// --- API Routes: Tasks (Vareovervågning) ---
+app.get('/api/tasks', (req, res) => {
+  res.json(tasksData);
+});
+
+app.post('/api/tasks', (req, res) => {
+  const { query, frequency } = req.body;
+  if (!query || !query.trim()) {
+    return res.status(400).json({ error: 'Søgeord mangler' });
+  }
+  const validFreqs = ['daily', 'twice-weekly', 'weekly'];
+  const freq = validFreqs.includes(frequency) ? frequency : 'weekly';
+  const task = {
+    id: crypto.randomUUID(),
+    query: query.trim(),
+    frequency: freq,
+    createdAt: new Date().toISOString(),
+    lastChecked: null,
+    lastNotified: null,
+    enabled: true,
+    bestPrice: null,
+    bestStore: null
+  };
+  tasksData.tasks.push(task);
+  saveTasks();
+  console.log(`[Tasks] Tilføjet: "${task.query}" (${task.frequency})`);
+  res.json(task);
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  const idx = tasksData.tasks.findIndex(t => t.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Opgave ikke fundet' });
+  const removed = tasksData.tasks.splice(idx, 1)[0];
+  saveTasks();
+  console.log(`[Tasks] Slettet: "${removed.query}"`);
+  res.json({ ok: true });
+});
+
+app.post('/api/tasks/:id/toggle', (req, res) => {
+  const task = tasksData.tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'Opgave ikke fundet' });
+  task.enabled = !task.enabled;
+  saveTasks();
+  console.log(`[Tasks] ${task.enabled ? 'Aktiveret' : 'Deaktiveret'}: "${task.query}"`);
+  res.json(task);
+});
+
+app.post('/api/tasks/run', async (req, res) => {
+  const { id } = req.body || {};
+  if (id) {
+    const task = tasksData.tasks.find(t => t.id === id);
+    if (!task) return res.status(404).json({ error: 'Opgave ikke fundet' });
+    await runTask(task);
+    res.json(task);
+  } else {
+    // Run all enabled tasks
+    const enabled = tasksData.tasks.filter(t => t.enabled);
+    for (const task of enabled) {
+      await runTask(task);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    res.json({ ok: true, ran: enabled.length });
+  }
+});
+
+// --- API Routes: Notifications ---
+app.get('/api/notifications', (req, res) => {
+  // Return config without exposing secrets in full
+  const cfg = JSON.parse(JSON.stringify(notificationsData));
+  // Mask passwords/tokens for display
+  if (cfg.services?.pushover?.appToken) cfg.services.pushover.appToken = '***';
+  if (cfg.services?.pushover?.userKey) cfg.services.pushover.userKey = '***';
+  if (cfg.services?.email?.smtpPass) cfg.services.email.smtpPass = '***';
+  if (cfg.services?.homeassistant?.webhookId) cfg.services.homeassistant.webhookId = '***';
+  res.json(cfg);
+});
+
+app.post('/api/notifications', (req, res) => {
+  const incoming = req.body;
+  if (!incoming?.services) {
+    return res.status(400).json({ error: 'Ugyldig konfiguration' });
+  }
+  // Merge: only update fields that are sent (don't overwrite secrets with '***')
+  const s = incoming.services;
+  const cur = notificationsData.services;
+  if (s.pushover) {
+    cur.pushover.enabled = !!s.pushover.enabled;
+    if (s.pushover.appToken && s.pushover.appToken !== '***') cur.pushover.appToken = s.pushover.appToken;
+    if (s.pushover.userKey && s.pushover.userKey !== '***') cur.pushover.userKey = s.pushover.userKey;
+  }
+  if (s.email) {
+    cur.email.enabled = !!s.email.enabled;
+    if (s.email.smtpHost) cur.email.smtpHost = s.email.smtpHost;
+    if (s.email.smtpPort) cur.email.smtpPort = parseInt(s.email.smtpPort) || 587;
+    if (s.email.smtpUser) cur.email.smtpUser = s.email.smtpUser;
+    if (s.email.smtpPass && s.email.smtpPass !== '***') cur.email.smtpPass = s.email.smtpPass;
+    if (s.email.toEmail) cur.email.toEmail = s.email.toEmail;
+    if (s.email.fromEmail) cur.email.fromEmail = s.email.fromEmail;
+  }
+  if (s.homeassistant) {
+    cur.homeassistant.enabled = !!s.homeassistant.enabled;
+    if (s.homeassistant.baseUrl) cur.homeassistant.baseUrl = s.homeassistant.baseUrl;
+    if (s.homeassistant.webhookId && s.homeassistant.webhookId !== '***') cur.homeassistant.webhookId = s.homeassistant.webhookId;
+  }
+  resetEmailTransporter();
+  saveNotifications();
+  console.log('[Notifications] Konfiguration gemt');
+  res.json({ ok: true });
+});
+
+app.post('/api/notifications/test', async (req, res) => {
+  const { service } = req.body || {};
+  const title = 'PrisJagt testnotifikation';
+  const message = 'Dette er en test fra PrisJagt. Notifikationerne fungerer!';
+  try {
+    if (service === 'pushover') await sendPushoverNotification(title, message);
+    else if (service === 'email') await sendEmailNotification(title, message);
+    else if (service === 'homeassistant') await sendHomeAssistantNotification(title, message);
+    else return res.status(400).json({ error: 'Ugyldig service' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

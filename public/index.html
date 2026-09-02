@@ -54,6 +54,12 @@
         </svg>
         Scan opskrift
       </button>
+      <button class="nav-tab" id="tab-btn-tasks" data-target="tab-content-tasks">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="tab-icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+        </svg>
+        Vareovervågning
+      </button>
     </nav>
 
     <!-- TAB: Search Content -->
@@ -291,6 +297,52 @@
       </section>
     </div> <!-- END OF TAB: Recipe Content -->
 
+    <!-- TAB: Vareovervågning (Tasks) -->
+    <div id="tab-content-tasks" class="tab-pane">
+      <section class="search-section">
+        <div class="search-card">
+          <div class="recipe-input-group">
+            <h2 class="section-title">Vareovervågning</h2>
+            <p class="section-desc">Tilføj varer du vil holdes øje med. PrisJagt søger automatisk efter tilbud og sender en notifikation når varen er på tilbud.</p>
+          </div>
+          <form id="task-form" class="search-form">
+            <div class="input-wrapper">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="search-icon">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+              </svg>
+              <input type="text" id="task-query-input" placeholder="Søg efter en vare (f.eks. dadler, cola, pasta...)" autocomplete="off" required>
+            </div>
+            <div class="task-controls-row">
+              <select id="task-frequency" class="custom-select">
+                <option value="daily">Dagligt</option>
+                <option value="twice-weekly">2 gange om ugen</option>
+                <option value="weekly" selected>Ugentligt</option>
+              </select>
+              <button type="submit" class="submit-button">Tilføj overvågning</button>
+              <button type="button" id="task-run-all-btn" class="submit-button secondary-btn">Søg nu</button>
+            </div>
+          </form>
+          <p id="task-status" class="recipe-source-note hidden"></p>
+        </div>
+      </section>
+
+      <!-- Active Watches -->
+      <section class="task-list-section">
+        <div id="task-empty-state" class="empty-state">
+          <div class="empty-illustration">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="empty-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+            </svg>
+          </div>
+          <h2>Ingen overvågninger endnu</h2>
+          <p>Tilføj en vare ovenfor for at begynde at overvåge priser og tilbud.</p>
+        </div>
+        <div id="task-list" class="task-list">
+          <!-- Dynamically populated task cards -->
+        </div>
+      </section>
+    </div> <!-- END OF TAB: Tasks Content -->
+
     <!-- Footer -->
     <footer class="main-footer">
       <p>&copy; 2026 PrisJagt. Udviklet til personlig prissammenligning.</p>
@@ -363,6 +415,101 @@
           
           <div id="settings-test-result" class="test-result-box hidden"></div>
         </form>
+
+        <!-- Notifications Config -->
+        <div class="notifications-config">
+          <h3 class="settings-divider-title">Notifikationer</h3>
+          <p class="settings-intro">Konfigurer hvordan du vil have besked når en overvåget vare kommer på tilbud.</p>
+
+          <!-- Pushover -->
+          <div class="notification-service">
+            <div class="notification-header">
+              <label class="toggle-switch">
+                <input type="checkbox" id="notif-pushover-enabled" class="notif-toggle">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="notification-label">Pushover</span>
+              <button type="button" class="submit-button secondary-btn notification-test-btn" data-service="pushover">Test</button>
+            </div>
+            <div class="notification-fields" id="notif-pushover-fields">
+              <div class="form-group">
+                <label for="notif-pushover-token">App Token</label>
+                <input type="password" id="notif-pushover-token" class="custom-input" placeholder="azGDORePK8gMaC0QOYAMyEEuzJnyUi">
+              </div>
+              <div class="form-group">
+                <label for="notif-pushover-user">User Key</label>
+                <input type="password" id="notif-pushover-user" class="custom-input" placeholder="uQiRzpo4DXghDmr9QzzfQu27cmVRsG">
+              </div>
+            </div>
+          </div>
+
+          <!-- E-mail -->
+          <div class="notification-service">
+            <div class="notification-header">
+              <label class="toggle-switch">
+                <input type="checkbox" id="notif-email-enabled" class="notif-toggle">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="notification-label">E-mail (SMTP)</span>
+              <button type="button" class="submit-button secondary-btn notification-test-btn" data-service="email">Test</button>
+            </div>
+            <div class="notification-fields" id="notif-email-fields">
+              <div class="form-group">
+                <label for="notif-email-host">SMTP Vært</label>
+                <input type="text" id="notif-email-host" class="custom-input" placeholder="f.eks. smtp.gmail.com">
+              </div>
+              <div class="form-group-row">
+                <div class="form-group half">
+                  <label for="notif-email-port">Port</label>
+                  <input type="number" id="notif-email-port" class="custom-input" value="587">
+                </div>
+                <div class="form-group half">
+                  <label for="notif-email-user">Brugernavn</label>
+                  <input type="text" id="notif-email-user" class="custom-input" placeholder="din@email.dk">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="notif-email-pass">Adgangskode</label>
+                <input type="password" id="notif-email-pass" class="custom-input" placeholder="Din adgangskode / app-adgangskode">
+              </div>
+              <div class="form-group-row">
+                <div class="form-group half">
+                  <label for="notif-email-to">Modtager-e-mail</label>
+                  <input type="email" id="notif-email-to" class="custom-input" placeholder="modtager@email.dk">
+                </div>
+                <div class="form-group half">
+                  <label for="notif-email-from">Afsender-e-mail</label>
+                  <input type="email" id="notif-email-from" class="custom-input" placeholder=" afsender@email.dk">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Home Assistant -->
+          <div class="notification-service">
+            <div class="notification-header">
+              <label class="toggle-switch">
+                <input type="checkbox" id="notif-ha-enabled" class="notif-toggle">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="notification-label">Home Assistant</span>
+              <button type="button" class="submit-button secondary-btn notification-test-btn" data-service="homeassistant">Test</button>
+            </div>
+            <div class="notification-fields" id="notif-ha-fields">
+              <div class="form-group">
+                <label for="notif-ha-url">Base URL</label>
+                <input type="text" id="notif-ha-url" class="custom-input" placeholder="f.eks. http://192.168.1.100:8123">
+              </div>
+              <div class="form-group">
+                <label for="notif-ha-webhook">Webhook ID / API Token</label>
+                <input type="password" id="notif-ha-webhook" class="custom-input" placeholder="Webhook ID eller Long-Lived Access Token">
+                <p class="input-help">Webhook: Brug webhook-ID fra Home Assistant. REST API: Indtast Long-Lived Access Token.</p>
+              </div>
+            </div>
+          </div>
+
+          <button type="button" id="notif-save-btn" class="submit-button">Gem Notifikationsindstillinger</button>
+        </div>
       </div>
     </div>
   </div>
@@ -370,5 +517,6 @@
   <script src="index.js"></script>
   <script src="settings.js"></script>
   <script src="recipe.js"></script>
+  <script src="tasks.js"></script>
 </body>
 </html>

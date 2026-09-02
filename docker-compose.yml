@@ -12,3 +12,4 @@ services:
     volumes:
       - .env:/app/.env # Gør det muligt at opdatere API-nøgler uden at genbygge billedet
       - ./public:/app/public # Gør frontend-ændringer (HTML/JS/CSS) aktive ved genstart efter git pull
+      - ./data:/app/data # Persisterer vareovervågning + notifikationskonfiguration

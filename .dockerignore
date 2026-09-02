@@ -5,3 +5,4 @@ npm-debug.log
 .github
 .DS_Store
 *.md
+data
