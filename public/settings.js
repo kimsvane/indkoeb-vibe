@@ -317,13 +317,16 @@ function applyNotificationConfig() {
   const push = s.pushover || {};
   const email = s.email || {};
   const ha = s.homeassistant || {};
+  const bb = s.bluebubbles || {};
 
   const po = document.getElementById('notif-pushover-enabled');
   const e = document.getElementById('notif-email-enabled');
   const h = document.getElementById('notif-ha-enabled');
+  const b = document.getElementById('notif-bb-enabled');
   if (po) po.checked = !!push.enabled;
   if (e) e.checked = !!email.enabled;
   if (h) h.checked = !!ha.enabled;
+  if (b) b.checked = !!bb.enabled;
 
   if (push.appToken) document.getElementById('notif-pushover-token').value = push.appToken;
   if (push.userKey) document.getElementById('notif-pushover-user').value = push.userKey;
@@ -338,16 +341,21 @@ function applyNotificationConfig() {
   if (ha.baseUrl) document.getElementById('notif-ha-url').value = ha.baseUrl;
   if (ha.webhookId && ha.webhookId !== '***') document.getElementById('notif-ha-webhook').value = ha.webhookId;
 
+  if (bb.baseUrl) document.getElementById('notif-bb-url').value = bb.baseUrl;
+  if (bb.password && bb.password !== '***') document.getElementById('notif-bb-password').value = bb.password;
+  if (bb.recipient) document.getElementById('notif-bb-recipient').value = bb.recipient;
+
   toggleNotifFields('pushover');
   toggleNotifFields('email');
   toggleNotifFields('homeassistant');
+  toggleNotifFields('bluebubbles');
 }
 
 function toggleNotifFields(service) {
-  const map = { pushover: 'notif-pushover-enabled', email: 'notif-email-enabled', homeassistant: 'notif-ha-enabled' };
+  const map = { pushover: 'notif-pushover-enabled', email: 'notif-email-enabled', homeassistant: 'notif-ha-enabled', bluebubbles: 'notif-bb-enabled' };
   const el = document.getElementById(map[service]);
   if (!el) return;
-  const fieldsMap = { pushover: 'notif-pushover-fields', email: 'notif-email-fields', homeassistant: 'notif-ha-fields' };
+  const fieldsMap = { pushover: 'notif-pushover-fields', email: 'notif-email-fields', homeassistant: 'notif-ha-fields', bluebubbles: 'notif-bb-fields' };
   const fields = document.getElementById(fieldsMap[service]);
   if (fields) fields.classList.toggle('hidden', !el.checked);
 }
@@ -355,7 +363,7 @@ function toggleNotifFields(service) {
 function setupNotificationListeners() {
   document.querySelectorAll('.notif-toggle').forEach(input => {
     input.addEventListener('change', () => {
-      const map = { 'notif-pushover-enabled': 'pushover', 'notif-email-enabled': 'email', 'notif-ha-enabled': 'homeassistant' };
+      const map = { 'notif-pushover-enabled': 'pushover', 'notif-email-enabled': 'email', 'notif-ha-enabled': 'homeassistant', 'notif-bb-enabled': 'bluebubbles' };
       toggleNotifFields(map[input.id]);
     });
   });
@@ -407,6 +415,12 @@ function collectNotificationConfig() {
         enabled: document.getElementById('notif-ha-enabled').checked,
         baseUrl: document.getElementById('notif-ha-url').value.trim(),
         webhookId: document.getElementById('notif-ha-webhook').value.trim()
+      },
+      bluebubbles: {
+        enabled: document.getElementById('notif-bb-enabled').checked,
+        baseUrl: document.getElementById('notif-bb-url').value.trim(),
+        password: document.getElementById('notif-bb-password').value,
+        recipient: document.getElementById('notif-bb-recipient').value.trim()
       }
     }
   };

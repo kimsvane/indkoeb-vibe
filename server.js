@@ -1198,9 +1198,26 @@ let notificationsData = readJsonFile('notifications.json', {
   services: {
     pushover: { enabled: false, appToken: '', userKey: '' },
     email: { enabled: false, smtpHost: '', smtpPort: 587, smtpUser: '', smtpPass: '', toEmail: '', fromEmail: '' },
-    homeassistant: { enabled: false, baseUrl: '', webhookId: '' }
+    homeassistant: { enabled: false, baseUrl: '', webhookId: '' },
+    bluebubbles: { enabled: false, baseUrl: '', password: '', recipient: '' }
   }
 });
+// Sørg for at alle services findes (f.eks. fra eksisterende data-fil uden bluebubbles)
+{
+  const defaults = {
+    services: {
+      pushover: { enabled: false, appToken: '', userKey: '' },
+      email: { enabled: false, smtpHost: '', smtpPort: 587, smtpUser: '', smtpPass: '', toEmail: '', fromEmail: '' },
+      homeassistant: { enabled: false, baseUrl: '', webhookId: '' },
+      bluebubbles: { enabled: false, baseUrl: '', password: '', recipient: '' }
+    }
+  };
+  notificationsData.services = notificationsData.services || {};
+  for (const [svc, dflt] of Object.entries(defaults.services)) {
+    notificationsData.services[svc] = { ...dflt, ...(notificationsData.services[svc] || {}) };
+  }
+  saveNotifications();
+}
 function saveNotifications() { writeJsonFile('notifications.json', notificationsData); }
 
 // --- Nodemailer transporter (lazy init) ---
@@ -1297,11 +1314,41 @@ async function sendHomeAssistantNotification(title, message) {
   }
 }
 
+async function sendBlueBubblesNotification(title, message) {
+  const cfg = notificationsData.services?.bluebubbles;
+  if (!cfg?.enabled || !cfg.baseUrl || !cfg.password || !cfg.recipient) return;
+  try {
+    let cleanRecipient = cfg.recipient.trim().replace(/[\s-]/g, '');
+    // Danske numre uden landekode: 8 cifre → +45XXXXXXXX
+    if (/^[0-9]{8}$/.test(cleanRecipient)) cleanRecipient = `+45${cleanRecipient}`;
+    else if (!cleanRecipient.startsWith('+')) cleanRecipient = `+${cleanRecipient}`;
+    const url = `${cfg.baseUrl.replace(/\/$/, '')}/api/v1/message/text?guid=${encodeURIComponent(cfg.password)}`;
+    const fullMessage = `${title}\n${message}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatGuid: `iMessage;-;${cleanRecipient}`,
+        text: fullMessage,
+        method: 'private-api'
+      })
+    });
+    if (!res.ok) {
+      console.error('[Notify] BlueBubbles fejlede:', res.status);
+    } else {
+      console.log('[Notify] BlueBubbles (iMessage) sendt:', title);
+    }
+  } catch (err) {
+    console.error('[Notify] BlueBubbles fejlede:', err.message);
+  }
+}
+
 async function sendAllNotifications(title, message) {
   await Promise.allSettled([
     sendPushoverNotification(title, message),
     sendEmailNotification(title, message),
-    sendHomeAssistantNotification(title, message)
+    sendHomeAssistantNotification(title, message),
+    sendBlueBubblesNotification(title, message)
   ]);
 }
 
@@ -1475,6 +1522,7 @@ app.get('/api/notifications', (req, res) => {
   if (cfg.services?.pushover?.userKey) cfg.services.pushover.userKey = '***';
   if (cfg.services?.email?.smtpPass) cfg.services.email.smtpPass = '***';
   if (cfg.services?.homeassistant?.webhookId) cfg.services.homeassistant.webhookId = '***';
+  if (cfg.services?.bluebubbles?.password) cfg.services.bluebubbles.password = '***';
   res.json(cfg);
 });
 
@@ -1505,6 +1553,12 @@ app.post('/api/notifications', (req, res) => {
     if (s.homeassistant.baseUrl) cur.homeassistant.baseUrl = s.homeassistant.baseUrl;
     if (s.homeassistant.webhookId && s.homeassistant.webhookId !== '***') cur.homeassistant.webhookId = s.homeassistant.webhookId;
   }
+  if (s.bluebubbles) {
+    cur.bluebubbles.enabled = !!s.bluebubbles.enabled;
+    if (s.bluebubbles.baseUrl) cur.bluebubbles.baseUrl = s.bluebubbles.baseUrl;
+    if (s.bluebubbles.password && s.bluebubbles.password !== '***') cur.bluebubbles.password = s.bluebubbles.password;
+    if (s.bluebubbles.recipient) cur.bluebubbles.recipient = s.bluebubbles.recipient;
+  }
   resetEmailTransporter();
   saveNotifications();
   console.log('[Notifications] Konfiguration gemt');
@@ -1519,6 +1573,7 @@ app.post('/api/notifications/test', async (req, res) => {
     if (service === 'pushover') await sendPushoverNotification(title, message);
     else if (service === 'email') await sendEmailNotification(title, message);
     else if (service === 'homeassistant') await sendHomeAssistantNotification(title, message);
+    else if (service === 'bluebubbles') await sendBlueBubblesNotification(title, message);
     else return res.status(400).json({ error: 'Ugyldig service' });
     res.json({ ok: true });
   } catch (err) {
