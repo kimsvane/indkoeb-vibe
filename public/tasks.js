@@ -6,6 +6,7 @@
 
 // --- State ---
 let watchedTasks = [];
+let availableChains = [];
 
 // --- DOM References ---
 const taskForm = document.getElementById('task-form');
@@ -15,12 +16,43 @@ const taskList = document.getElementById('task-list');
 const taskEmptyState = document.getElementById('task-empty-state');
 const taskRunAllBtn = document.getElementById('task-run-all-btn');
 const taskStatus = document.getElementById('task-status');
+const taskChainsList = document.getElementById('task-chains-list');
+const taskChainsToggleAll = document.getElementById('task-chains-toggle-all');
 
 // --- Init ---
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setupTaskListeners();
+  await loadChains();
   loadTasks();
 });
+
+async function loadChains() {
+  try {
+    const res = await fetch('/api/tasks/chains');
+    if (!res.ok) throw new Error('Fejl');
+    const data = await res.json();
+    availableChains = data.chains || [];
+    renderChainCheckboxes();
+  } catch (err) {
+    console.error('[Tasks] Kunne ikke hente butikker:', err.message);
+  }
+}
+
+function renderChainCheckboxes() {
+  if (!taskChainsList) return;
+  taskChainsList.innerHTML = '';
+  availableChains.forEach(chain => {
+    const label = document.createElement('label');
+    label.className = 'task-chain-item';
+    label.innerHTML = `<input type="checkbox" value="${escapeHtml(chain)}" class="task-chain-checkbox"> ${escapeHtml(chain)}`;
+    taskChainsList.appendChild(label);
+  });
+}
+
+function getSelectedChains() {
+  if (!taskChainsList) return [];
+  return Array.from(taskChainsList.querySelectorAll('.task-chain-checkbox:checked')).map(cb => cb.value);
+}
 
 function setupTaskListeners() {
   if (taskForm) {
@@ -29,13 +61,23 @@ function setupTaskListeners() {
       const query = taskQueryInput.value.trim();
       if (!query) return;
       const frequency = taskFrequency.value;
-      await addTask(query, frequency);
+      const chains = getSelectedChains();
+      await addTask(query, frequency, chains);
       taskQueryInput.value = '';
     });
   }
 
   if (taskRunAllBtn) {
     taskRunAllBtn.addEventListener('click', runAllTasks);
+  }
+
+  if (taskChainsToggleAll) {
+    taskChainsToggleAll.addEventListener('click', () => {
+      const checkboxes = taskChainsList.querySelectorAll('.task-chain-checkbox');
+      const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+      checkboxes.forEach(cb => { cb.checked = !allChecked; });
+      taskChainsToggleAll.textContent = allChecked ? 'Vælg alle' : 'Fravælg alle';
+    });
   }
 }
 
@@ -52,13 +94,13 @@ async function loadTasks() {
   }
 }
 
-async function addTask(query, frequency) {
+async function addTask(query, frequency, chains = []) {
   try {
     showTaskStatus('Tilføjer...');
     const res = await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, frequency })
+      body: JSON.stringify({ query, frequency, chains })
     });
     if (!res.ok) throw new Error('Fejl');
     const task = await res.json();
@@ -149,6 +191,7 @@ function renderTaskList() {
     card.className = `task-card ${task.enabled ? '' : 'task-disabled'}`;
 
     const freqLabel = { daily: 'Dagligt', 'twice-weekly': '2 gange/uge', weekly: 'Ugentligt' }[task.frequency] || task.frequency;
+    const chainsLabel = task.chains?.length > 0 ? task.chains.join(', ') : 'Alle butikker';
 
     let statusLine = '';
     if (task.lastChecked) {
@@ -175,6 +218,7 @@ function renderTaskList() {
           <button class="task-btn task-delete-btn" data-id="${task.id}" title="Slet">✕</button>
         </div>
       </div>
+      <div class="task-card-chains">${escapeHtml(chainsLabel)}</div>
       <div class="task-card-status">${statusLine}</div>
     `;
 

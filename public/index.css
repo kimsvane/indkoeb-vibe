@@ -1573,6 +1573,59 @@ body {
   font-size: 0.82rem;
   color: var(--text-secondary, #6b7280);
 }
+.task-card-chains {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--text-secondary, #6b7280);
+  font-style: italic;
+}
+
+/* Task chain selector */
+.task-chains-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+}
+.task-chains-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.task-chains-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary, #6b7280);
+}
+.task-chains-toggle-all {
+  font-size: 0.78rem;
+  color: var(--primary-color, #4f46e5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.task-chains-toggle-all:hover {
+  color: var(--primary-hover, #4338ca);
+}
+.task-chains-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.task-chain-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.task-chain-item input[type="checkbox"] {
+  accent-color: var(--primary-color, #4f46e5);
+}
 
 /* Notification services */
 .notifications-config {

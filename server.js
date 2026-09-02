@@ -1392,23 +1392,27 @@ async function runTask(task) {
     const nemligItems = [];
     const tjekItems = [];
     const shelfItems = [];
+    const selectedChains = Array.isArray(task.chains) ? task.chains : [];
+    const filterEnabled = selectedChains.length > 0;
 
-    // Fetch nemlig
-    try {
-      await nemligSession.ensureSession();
-      const qp = new URLSearchParams({
-        query: task.query, take: '20', skip: '0', recipeCount: '0',
-        timestamp: nemligSession.timestamp, timeslotUtc: nemligSession.timeslotUtc,
-        deliveryZoneId: nemligSession.deliveryZoneId
-      });
-      const r = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${qp}`, {
-        headers: { ...NEMLIG_DEFAULT_HEADERS, 'X-Correlation-Id': crypto.randomUUID(), Authorization: `Bearer ${nemligSession.bearerToken}` }
-      });
-      const d = await r.json();
-      nemligItems.push(...(d.Products?.Products || []).map(parseNemligProduct));
-    } catch {}
+    // Fetch nemlig (kun hvis valgt eller ingen filter)
+    if (!filterEnabled || selectedChains.includes('nemlig.com')) {
+      try {
+        await nemligSession.ensureSession();
+        const qp = new URLSearchParams({
+          query: task.query, take: '20', skip: '0', recipeCount: '0',
+          timestamp: nemligSession.timestamp, timeslotUtc: nemligSession.timeslotUtc,
+          deliveryZoneId: nemligSession.deliveryZoneId
+        });
+        const r = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${qp}`, {
+          headers: { ...NEMLIG_DEFAULT_HEADERS, 'X-Correlation-Id': crypto.randomUUID(), Authorization: `Bearer ${nemligSession.bearerToken}` }
+        });
+        const d = await r.json();
+        nemligItems.push(...(d.Products?.Products || []).map(parseNemligProduct));
+      } catch {}
+    }
 
-    // Fetch Tjek
+    // Fetch Tjek (altid - filtreres efter)
     try {
       const tp = new URLSearchParams({ query: task.query, country_id: 'DK', limit: '50' });
       const r = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${tp}`, { headers: { 'User-Agent': 'prisjagt-scheduler/1.0' } });
@@ -1416,12 +1420,18 @@ async function runTask(task) {
       tjekItems.push(...d.map(parseTjekProduct));
     } catch {}
 
-    // Fetch ShelfAtlas
+    // Fetch ShelfAtlas (altid - filtreres efter)
     try {
       shelfItems.push(...await fetchShelfAtlas(task.query));
     } catch {}
 
-    const all = [...nemligItems, ...tjekItems, ...shelfItems].filter(i => i && i.price != null);
+    let all = [...nemligItems, ...tjekItems, ...shelfItems].filter(i => i && i.price != null);
+
+    // Filtrer efter valgte butikker
+    if (filterEnabled) {
+      all = all.filter(i => selectedChains.includes(i.store));
+    }
+
     all.sort((a, b) => a.price - b.price);
 
     const offerItems = all.filter(i => i.isOffer);
@@ -1469,12 +1479,17 @@ setInterval(runScheduler, 15 * 60 * 1000);
 console.log('[Scheduler] Prisovervågningsscheduler startet (hvert 15. minut)');
 
 // --- API Routes: Tasks (Vareovervågning) ---
+app.get('/api/tasks/chains', (req, res) => {
+  const chains = Object.keys(STORE_DATA.chains || {}).concat(['nemlig.com']);
+  res.json({ chains });
+});
+
 app.get('/api/tasks', (req, res) => {
   res.json(tasksData);
 });
 
 app.post('/api/tasks', (req, res) => {
-  const { query, frequency } = req.body;
+  const { query, frequency, chains } = req.body;
   if (!query || !query.trim()) {
     return res.status(400).json({ error: 'Søgeord mangler' });
   }
@@ -1484,6 +1499,7 @@ app.post('/api/tasks', (req, res) => {
     id: crypto.randomUUID(),
     query: query.trim(),
     frequency: freq,
+    chains: Array.isArray(chains) ? chains : [],
     createdAt: new Date().toISOString(),
     lastChecked: null,
     lastNotified: null,
@@ -1493,7 +1509,7 @@ app.post('/api/tasks', (req, res) => {
   };
   tasksData.tasks.push(task);
   saveTasks();
-  console.log(`[Tasks] Tilføjet: "${task.query}" (${task.frequency})`);
+  console.log(`[Tasks] Tilføjet: "${task.query}" (${task.frequency}) butikker: [${task.chains.join(', ') || 'alle'}]`);
   res.json(task);
 });
 
@@ -1512,6 +1528,17 @@ app.post('/api/tasks/:id/toggle', (req, res) => {
   task.enabled = !task.enabled;
   saveTasks();
   console.log(`[Tasks] ${task.enabled ? 'Aktiveret' : 'Deaktiveret'}: "${task.query}"`);
+  res.json(task);
+});
+
+app.patch('/api/tasks/:id', (req, res) => {
+  const task = tasksData.tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'Opgave ikke fundet' });
+  const { chains, frequency } = req.body;
+  if (Array.isArray(chains)) task.chains = chains;
+  if (frequency && ['daily', 'twice-weekly', 'weekly'].includes(frequency)) task.frequency = frequency;
+  saveTasks();
+  console.log(`[Tasks] Opdateret: "${task.query}" butikker: [${task.chains?.join(', ') || 'alle'}]`);
   res.json(task);
 });
 
