@@ -84,6 +84,7 @@ let serverConfiguredProviders = [];
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
+  await loadServerSettings(); // Hent server-side persisted indstillinger først
   setupEventListeners();
   setupNotificationListeners();
   await detectServerConfig(); // Check server for globally configured API keys
@@ -139,6 +140,29 @@ function loadConfig() {
 // Save config to localStorage
 function saveConfig() {
   localStorage.setItem('prisjagt_ai_config', JSON.stringify(aiConfig));
+  // Persister også på serveren (data/settings.json) så indstillingerne ikke mistes ved redeploy
+  try {
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aiConfig })
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+// Hent server-side persisted settings og merge ind i aiConfig
+async function loadServerSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.aiConfig) {
+      aiConfig = { ...aiConfig, ...data.aiConfig };
+      saveConfig();
+    }
+  } catch (err) {
+    console.warn('[Settings] Kunne ikke hente server-indstillinger:', err.message);
+  }
 }
 
 // Update DOM elements based on loaded/saved config

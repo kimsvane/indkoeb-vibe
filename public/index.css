@@ -1579,6 +1579,20 @@ body {
   color: var(--text-secondary, #6b7280);
   font-style: italic;
 }
+.task-card-detail {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--text-strong, #111827);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.task-unit-size {
+  font-weight: 600;
+}
+.task-unit-label {
+  color: var(--text-secondary, #6b7280);
+}
 
 /* Task chain selector */
 .task-chains-section {

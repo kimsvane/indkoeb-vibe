@@ -204,6 +204,18 @@ function renderTaskList() {
       statusLine = 'Ikke søgt endnu';
     }
 
+    // Vis mængde + enhedspris (kr/kg, kr/l) + % sammenligning med historisk normalpris
+    const latest = Array.isArray(task.history) && task.history.length > 0 ? task.history[task.history.length - 1] : null;
+    let detailLine = '';
+    if (latest) {
+      const parts = [];
+      if (latest.size) parts.push(`<span class="task-unit-size">${escapeHtml(latest.size)}</span>`);
+      if (latest.pricePerUnit != null) {
+        parts.push(`${latest.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span class="task-unit-label">${escapeHtml((latest.unitPriceLabel || 'kr/kg').replace('kr/', ''))}</span>`);
+      }
+      if (parts.length > 0) detailLine = `<div class="task-card-detail">${parts.join(' · ')}</div>`;
+    }
+
     card.innerHTML = `
       <div class="task-card-header">
         <div class="task-info">
@@ -219,6 +231,7 @@ function renderTaskList() {
         </div>
       </div>
       <div class="task-card-chains">${escapeHtml(chainsLabel)}</div>
+      ${detailLine}
       <div class="task-card-status">${statusLine}</div>
     `;
 

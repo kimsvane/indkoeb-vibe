@@ -1220,6 +1220,21 @@ let notificationsData = readJsonFile('notifications.json', {
 }
 function saveNotifications() { writeJsonFile('notifications.json', notificationsData); }
 
+// --- Generelle indstillinger (persisteret i data/settings.json) ---
+let appSettings = readJsonFile('settings.json', {});
+
+app.get('/api/settings', (req, res) => {
+  res.json(appSettings);
+});
+
+app.post('/api/settings', (req, res) => {
+  const incoming = req.body || {};
+  appSettings = { ...appSettings, ...incoming };
+  writeJsonFile('settings.json', appSettings);
+  console.log('[Settings] Indstillinger gemt');
+  res.json({ ok: true });
+});
+
 // --- Nodemailer transporter (lazy init) ---
 let emailTransporter = null;
 function getEmailTransporter() {
@@ -1379,6 +1394,36 @@ const FREQ_MS = {
   weekly: 7 * 24 * 60 * 60 * 1000
 };
 
+const MAX_HISTORY_PER_TASK = 60;
+
+function median(arr) {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Estimer normalprisen pr. enhed (fx kr/kg) ud fra tidligere ikke-tilbuds observationer
+function estimateUnitNormalPrice(task) {
+  const normals = (task.history || [])
+    .filter(h => !h.isOffer && h.pricePerUnit != null)
+    .map(h => h.pricePerUnit);
+  if (normals.length === 0) return null;
+  return median(normals);
+}
+
+function pushHistory(task, entry) {
+  task.history = task.history || [];
+  task.history.push(entry);
+  if (task.history.length > MAX_HISTORY_PER_TASK) task.history = task.history.slice(-MAX_HISTORY_PER_TASK);
+}
+
+function formatUnitPrice(item) {
+  if (item.pricePerUnit == null) return '';
+  const unitLabel = item.unitPriceLabel || '';
+  return `${item.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unitLabel}`.trim();
+}
+
 function isTaskDue(task) {
   if (!task.enabled) return false;
   const freq = FREQ_MS[task.frequency] || FREQ_MS.weekly;
@@ -1439,6 +1484,20 @@ async function runTask(task) {
 
     task.lastChecked = new Date().toISOString();
 
+    if (bestMatch) {
+      // Gem snapshot i historikken
+      pushHistory(task, {
+        ts: new Date().toISOString(),
+        name: bestMatch.name,
+        store: bestMatch.store,
+        price: bestMatch.price,
+        pricePerUnit: bestMatch.pricePerUnit,
+        unitPriceLabel: bestMatch.unitPriceLabel,
+        size: bestMatch.size,
+        isOffer: !!bestMatch.isOffer
+      });
+    }
+
     if (bestMatch && bestMatch.isOffer) {
       const prevBest = task.bestPrice;
       task.bestPrice = bestMatch.price;
@@ -1447,9 +1506,20 @@ async function runTask(task) {
       saveTasks();
 
       const priceStr = bestMatch.price.toLocaleString('da-DK', { minimumFractionDigits: 2 }) + ' kr';
-      const msg = `${task.query} er på tilbud!\n${bestMatch.name} — ${priceStr} i ${bestMatch.store}${bestMatch.size ? ' (' + bestMatch.size + ')' : ''}`;
+      const unitStr = formatUnitPrice(bestMatch);
+      const sizeStr = bestMatch.size ? ` (${bestMatch.size})` : '';
+
+      // Sammenlign med historisk normalpris pr. enhed for at vurdere om det er et reelt tilbud
+      const normalUnit = estimateUnitNormalPrice(task);
+      let savingsLine = '';
+      if (normalUnit != null && bestMatch.pricePerUnit != null && normalUnit > 0) {
+        const pct = Math.round((1 - bestMatch.pricePerUnit / normalUnit) * 100);
+        if (pct > 0) savingsLine = ` — ${pct}% lavere end normalprisen (${normalUnit.toLocaleString('da-DK', { minimumFractionDigits: 2 })} kr/${ (bestMatch.unitPriceLabel || 'kg').replace('kr/', '') || 'kg' })`;
+      }
+
+      const msg = `${task.query} er på tilbud!\n${bestMatch.name}${sizeStr}\n${priceStr} i ${bestMatch.store}${unitStr ? ` — ${unitStr}` : ''}${savingsLine}`;
       await sendAllNotifications(`Tilbud: ${task.query}`, msg);
-      console.log(`[Scheduler] Tilbud fundet for "${task.query}": ${priceStr} i ${bestMatch.store}`);
+      console.log(`[Scheduler] Tilbud fundet for "${task.query}": ${priceStr}${unitStr ? ' (' + unitStr + ')' : ''} i ${bestMatch.store}${savingsLine}`);
     } else {
       task.bestPrice = bestMatch?.price || null;
       task.bestStore = bestMatch?.store || null;
@@ -1505,7 +1575,8 @@ app.post('/api/tasks', (req, res) => {
     lastNotified: null,
     enabled: true,
     bestPrice: null,
-    bestStore: null
+    bestStore: null,
+    history: []
   };
   tasksData.tasks.push(task);
   saveTasks();
