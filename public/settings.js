@@ -377,14 +377,18 @@ function setupNotificationListeners() {
       const original = btn.textContent;
       btn.textContent = 'Sender...';
       try {
-        await saveNotificationConfig(true);
         const res = await fetch('/api/notifications/test', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ service: btn.dataset.service })
         });
-        const data = await res.json();
-        btn.textContent = data.ok ? 'Sendt ✓' : 'Fejl ✗';
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          btn.textContent = 'Sendt ✓';
+        } else {
+          btn.textContent = 'Fejl ✗';
+          alert('Test mislykkedes: ' + (data.error || data.message || 'ukendt fejl'));
+        }
       } catch (err) {
         btn.textContent = 'Fejl ✗';
       } finally {

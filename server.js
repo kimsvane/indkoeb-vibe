@@ -1316,12 +1316,13 @@ async function sendHomeAssistantNotification(title, message) {
 
 async function sendBlueBubblesNotification(title, message) {
   const cfg = notificationsData.services?.bluebubbles;
-  if (!cfg?.enabled || !cfg.baseUrl || !cfg.password || !cfg.recipient) return;
+  if (!cfg?.enabled || !cfg.baseUrl || !cfg.password || !cfg.recipient) return { ok: false, skipped: !cfg?.enabled, reason: !cfg?.baseUrl ? 'Server URL mangler' : !cfg?.password ? 'Server Password mangler' : !cfg?.recipient ? 'Ingen modtager(e) angivet' : 'Service ikke aktiveret' };
   try {
     const base = cfg.baseUrl.replace(/\/$/, '');
     const auth = `?password=${encodeURIComponent(cfg.password)}`;
     const fullMessage = `${title}\n${message}`;
     const addresses = cfg.recipient.split(',').map(s => s.trim()).filter(Boolean);
+    let sent = 0;
 
     for (const address of addresses) {
       try {
@@ -1344,18 +1345,21 @@ async function sendBlueBubblesNotification(title, message) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ addresses: [address], message: fullMessage })
           });
-          if (!res2.ok) console.error('[Notify] BlueBubbles fejlede ved chat-oprettelse for', address, ':', res2.status);
-          else console.log('[Notify] BlueBubbles (iMessage) oprettet chat + sendt:', address);
+          if (res2.ok) { sent++; console.log('[Notify] BlueBubbles (iMessage) oprettet chat + sendt:', address); }
+          else console.error('[Notify] BlueBubbles fejlede ved chat-oprettelse for', address, ':', res2.status);
           continue;
         }
-        if (!res.ok) console.error('[Notify] BlueBubbles fejlede:', address, ':', res.status);
-        else console.log('[Notify] BlueBubbles (iMessage) sendt:', address);
+        if (res.ok) { sent++; console.log('[Notify] BlueBubbles (iMessage) sendt:', address); }
+        else console.error('[Notify] BlueBubbles fejlede:', address, ':', res.status);
       } catch (err) {
         console.error('[Notify] BlueBubbles fejlede:', address, ':', err.message);
+        return { ok: false, reason: `${address}: ${err.message}` };
       }
     }
+    return sent > 0 ? { ok: true, sent } : { ok: false, reason: 'Ingen besked kunne sendes til nogen modtager' };
   } catch (err) {
     console.error('[Notify] BlueBubbles fejlede:', err.message);
+    return { ok: false, reason: err.message };
   }
 }
 
@@ -1586,10 +1590,15 @@ app.post('/api/notifications/test', async (req, res) => {
   const title = 'PrisJagt testnotifikation';
   const message = 'Dette er en test fra PrisJagt. Notifikationerne fungerer!';
   try {
+    let result;
+    if (service === 'bluebubbles') {
+      result = await sendBlueBubblesNotification(title, message);
+      if (!result.ok) return res.status(400).json({ ok: false, error: result.reason || 'iMessage-konfiguration mangler eller fejlede' });
+      return res.json({ ok: true });
+    }
     if (service === 'pushover') await sendPushoverNotification(title, message);
     else if (service === 'email') await sendEmailNotification(title, message);
     else if (service === 'homeassistant') await sendHomeAssistantNotification(title, message);
-    else if (service === 'bluebubbles') await sendBlueBubblesNotification(title, message);
     else return res.status(400).json({ error: 'Ugyldig service' });
     res.json({ ok: true });
   } catch (err) {
