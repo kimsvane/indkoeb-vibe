@@ -6,7 +6,7 @@
 
 // --- State ---
 let watchedTasks = [];
-let availableChains = [];
+let taskAvailableChains = [];
 
 // --- DOM References ---
 const taskForm = document.getElementById('task-form');
@@ -31,7 +31,7 @@ async function loadChains() {
     const res = await fetch('/api/tasks/chains');
     if (!res.ok) throw new Error('Fejl');
     const data = await res.json();
-    availableChains = data.chains || [];
+    taskAvailableChains = data.chains || [];
     renderChainCheckboxes();
   } catch (err) {
     console.error('[Tasks] Kunne ikke hente butikker:', err.message);
@@ -41,7 +41,7 @@ async function loadChains() {
 function renderChainCheckboxes() {
   if (!taskChainsList) return;
   taskChainsList.innerHTML = '';
-  availableChains.forEach(chain => {
+  taskAvailableChains.forEach(chain => {
     const label = document.createElement('label');
     label.className = 'task-chain-item';
     label.innerHTML = `<input type="checkbox" value="${escapeHtml(chain)}" class="task-chain-checkbox"> ${escapeHtml(chain)}`;
