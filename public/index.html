@@ -519,18 +519,19 @@
               <button type="button" class="submit-button secondary-btn notification-test-btn" data-service="bluebubbles">Test</button>
             </div>
             <div class="notification-fields" id="notif-bb-fields">
-              <p class="input-help">Kræver en Mac der kører BlueBubbles Server med iMessage aktiveret. Beskeder sendes som blå bobler via din Mac's Apple ID.</p>
+              <p class="input-help">Kræver en Mac der kører BlueBubbles Server med iMessage aktiveret. Beskeder sendes som blå bobler via Mac'ens Apple ID. Modtagere angives med iCloud-e-mail / Apple-ID.</p>
               <div class="form-group">
                 <label for="notif-bb-url">BlueBubbles Server URL</label>
-                <input type="text" id="notif-bb-url" class="custom-input" placeholder="f.eks. http://192.168.1.50:1234">
+                <input type="text" id="notif-bb-url" class="custom-input" placeholder="f.eks. http://192.168.1.135:1234">
               </div>
               <div class="form-group">
                 <label for="notif-bb-password">Server Password</label>
                 <input type="password" id="notif-bb-password" class="custom-input" placeholder="Angivet i BlueBubbles → Indstillinger → Forbindelse">
               </div>
               <div class="form-group">
-                <label for="notif-bb-recipient">Modtager-telefonnummer</label>
-                <input type="text" id="notif-bb-recipient" class="custom-input" placeholder="f.eks. 12345678 eller +4512345678">
+                <label for="notif-bb-recipient">Modtagere (iCloud-e-mail)</label>
+                <input type="text" id="notif-bb-recipient" class="custom-input" placeholder="f.eks. kim@ssvane.dk, ceciliebsvane@gmail.com">
+                <p class="input-help">Adskil flere modtagere med komma. Hver modtager får en separat besked.</p>
               </div>
             </div>
           </div>

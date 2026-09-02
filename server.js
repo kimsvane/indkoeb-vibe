@@ -1318,25 +1318,41 @@ async function sendBlueBubblesNotification(title, message) {
   const cfg = notificationsData.services?.bluebubbles;
   if (!cfg?.enabled || !cfg.baseUrl || !cfg.password || !cfg.recipient) return;
   try {
-    let cleanRecipient = cfg.recipient.trim().replace(/[\s-]/g, '');
-    // Danske numre uden landekode: 8 cifre → +45XXXXXXXX
-    if (/^[0-9]{8}$/.test(cleanRecipient)) cleanRecipient = `+45${cleanRecipient}`;
-    else if (!cleanRecipient.startsWith('+')) cleanRecipient = `+${cleanRecipient}`;
-    const url = `${cfg.baseUrl.replace(/\/$/, '')}/api/v1/message/text?guid=${encodeURIComponent(cfg.password)}`;
+    const base = cfg.baseUrl.replace(/\/$/, '');
+    const auth = `?password=${encodeURIComponent(cfg.password)}`;
     const fullMessage = `${title}\n${message}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chatGuid: `iMessage;-;${cleanRecipient}`,
-        text: fullMessage,
-        method: 'private-api'
-      })
-    });
-    if (!res.ok) {
-      console.error('[Notify] BlueBubbles fejlede:', res.status);
-    } else {
-      console.log('[Notify] BlueBubbles (iMessage) sendt:', title);
+    const addresses = cfg.recipient.split(',').map(s => s.trim()).filter(Boolean);
+
+    for (const address of addresses) {
+      try {
+        // Prøv først at sende til eksisterende chat
+        const res = await fetch(`${base}/api/v1/message/text${auth}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatGuid: `any;-;${address}`,
+            tempGuid: `temp-${crypto.randomUUID()}`,
+            message: fullMessage,
+            method: 'private-api'
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        // Hvis chat ikke findes, opret 1-til-1-chat og send
+        if (String(data?.error?.message).includes('Chat does not exist')) {
+          const res2 = await fetch(`${base}/api/v1/chat/new${auth}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ addresses: [address], message: fullMessage })
+          });
+          if (!res2.ok) console.error('[Notify] BlueBubbles fejlede ved chat-oprettelse for', address, ':', res2.status);
+          else console.log('[Notify] BlueBubbles (iMessage) oprettet chat + sendt:', address);
+          continue;
+        }
+        if (!res.ok) console.error('[Notify] BlueBubbles fejlede:', address, ':', res.status);
+        else console.log('[Notify] BlueBubbles (iMessage) sendt:', address);
+      } catch (err) {
+        console.error('[Notify] BlueBubbles fejlede:', address, ':', err.message);
+      }
     }
   } catch (err) {
     console.error('[Notify] BlueBubbles fejlede:', err.message);
