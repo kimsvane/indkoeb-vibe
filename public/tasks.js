@@ -204,16 +204,70 @@ function renderTaskList() {
       statusLine = 'Ikke søgt endnu';
     }
 
-    // Vis mængde + enhedspris (kr/kg, kr/l) + % sammenligning med historisk normalpris
+    // Vis den valgte vare, mængde og enhedspris fra seneste gennemgang.
     const latest = Array.isArray(task.history) && task.history.length > 0 ? task.history[task.history.length - 1] : null;
+    const assessment = task.lastAssessment || null;
     let detailLine = '';
-    if (latest) {
+    {
       const parts = [];
-      if (latest.size) parts.push(`<span class="task-unit-size">${escapeHtml(latest.size)}</span>`);
-      if (latest.pricePerUnit != null) {
-        parts.push(`${latest.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span class="task-unit-label">${escapeHtml((latest.unitPriceLabel || 'kr/kg').replace('kr/', ''))}</span>`);
+      if (assessment?.selectedProduct?.name) {
+        parts.push(`<span class="task-selected-product">${escapeHtml(assessment.selectedProduct.name)}${assessment.selectedProduct.store ? ` · ${escapeHtml(assessment.selectedProduct.store)}` : ''}</span>`);
+      }
+      if (latest?.size) parts.push(`<span class="task-unit-size">${escapeHtml(latest.size)}</span>`);
+      const unitEntry = latest?.pricePerUnit != null ? latest : assessment;
+      if (unitEntry?.pricePerUnit != null) {
+        parts.push(`${unitEntry.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span class="task-unit-label">${escapeHtml(String(unitEntry.unitPriceLabel || 'kr/kg').replace(/^kr\//, ''))}</span>`);
       }
       if (parts.length > 0) detailLine = `<div class="task-card-detail">${parts.join(' · ')}</div>`;
+    }
+
+    let assessmentLine = '';
+    if (assessment) {
+      const aiBadge = assessment.aiPowered
+        ? '<span class="task-ai-badge">🤖 AI-vurderet</span>'
+        : '<span class="task-ai-badge local">Lokal vurdering</span>';
+      const confidence = { high: 'høj', medium: 'mellem', low: 'lav' }[assessment.productConfidence] || assessment.productConfidence || 'ukendt';
+      const productClass = assessment.isCorrectProduct
+        ? (assessment.productConfidence === 'high' ? 'good' : 'warn')
+        : 'bad';
+      const productText = assessment.isCorrectProduct
+        ? `Rigtig vare: Ja (${confidence} sikkerhed)`
+        : 'Rigtig vare: Nej/usikker — ingen notifikation';
+      const discount = Number.isFinite(assessment.discountPercent) && Math.abs(assessment.discountPercent) >= 1
+        ? ` · ${Math.abs(assessment.discountPercent)}% ${assessment.discountPercent >= 0 ? 'under' : 'over'} normalpris`
+        : '';
+      const reasons = [assessment.reason, assessment.productReason].filter(Boolean).map(r => escapeHtml(r));
+      const normalNote = assessment.normalUnitPrice != null
+        ? `Normalpris (30 dage): ${escapeHtml(taskFormatUnit({ pricePerUnit: assessment.normalUnitPrice, unitPriceLabel: latest?.unitPriceLabel || 'kr/l' }))}`
+        : '';
+      assessmentLine = `
+        <div class="task-assessment">
+          <div class="task-assessment-badges">
+            ${aiBadge}
+            <span class="task-verdict ${taskPriceVerdictClass(assessment.status)}">${taskPriceVerdictLabel(assessment.status)}${discount}</span>
+          </div>
+          <div class="task-verdict ${productClass}">${productText}</div>
+          ${normalNote ? `<div class="task-assessment-reason">${normalNote}</div>` : ''}
+          ${reasons.length ? `<div class="task-assessment-reason">${reasons.join(' · ')}</div>` : ''}
+        </div>
+      `;
+    }
+
+    let historyBlock = '';
+    const history = Array.isArray(task.history) ? task.history.slice(-15).reverse() : [];
+    if (history.length > 0) {
+      const rows = history.map(h => {
+        const date = h.ts ? new Date(h.ts).toLocaleDateString('da-DK', { day: '2-digit', month: '2-digit' }) : '–';
+        const unit = h.pricePerUnit != null ? `<span class="task-history-unit">${escapeHtml(taskFormatUnit(h))}</span>` : '';
+        const offer = h.isOffer ? '<span class="task-history-offer">tilbud</span>' : '';
+        return `<div class="task-history-row"><span>${date}</span><span>${escapeHtml(h.store || '')}</span><span>${formatPrice(h.price)}${unit}${offer}</span></div>`;
+      }).join('');
+      historyBlock = `
+        <details class="task-history">
+          <summary>Prishistorik — ${task.history.length} observationer (30 dage)</summary>
+          <div class="task-history-list">${rows}</div>
+        </details>
+      `;
     }
 
     card.innerHTML = `
@@ -232,7 +286,9 @@ function renderTaskList() {
       </div>
       <div class="task-card-chains">${escapeHtml(chainsLabel)}</div>
       ${detailLine}
+      ${assessmentLine}
       <div class="task-card-status">${statusLine}</div>
+      ${historyBlock}
     `;
 
     taskList.appendChild(card);
@@ -256,6 +312,30 @@ function renderTaskList() {
 function formatPrice(price) {
   if (price == null) return '–';
   return price.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
+}
+
+function taskPriceVerdictLabel(status) {
+  return {
+    real_discount: 'Reelt tilbud',
+    normal_price: 'Normalpris',
+    higher_than_normal: 'Over normalpris',
+    unknown: 'Prisvurdering mangler'
+  }[status] || 'Prisvurdering mangler';
+}
+
+function taskPriceVerdictClass(status) {
+  return {
+    real_discount: 'good',
+    normal_price: 'neutral',
+    higher_than_normal: 'bad',
+    unknown: 'neutral'
+  }[status] || 'neutral';
+}
+
+function taskFormatUnit(entry) {
+  if (entry?.pricePerUnit == null) return '';
+  const label = String(entry.unitPriceLabel || 'kr/kg').replace(/^kr\//, '');
+  return `${entry.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr/${label}`;
 }
 
 function escapeHtml(str) {

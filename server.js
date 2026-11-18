@@ -10,7 +10,9 @@ import {
   parseShoppingListHeuristic,
   buildListParsePrompt,
   extractJsonArray,
-  normalizeParsedItems
+  normalizeParsedItems,
+  inferCategory,
+  fallbackQueriesFor
 } from './lib/list-parser.js';
 
 dotenv.config();
@@ -1518,7 +1520,9 @@ const FREQ_MS = {
   weekly: 7 * 24 * 60 * 60 * 1000
 };
 
-const MAX_HISTORY_PER_TASK = 60;
+// Prishistorik gemmes pr. opgave i op til 30 dage.
+const HISTORY_DAYS = 30;
+const MAX_HISTORY_PER_TASK = 300;
 
 function median(arr) {
   if (arr.length === 0) return null;
@@ -1527,25 +1531,241 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-// Estimer normalprisen pr. enhed (fx kr/kg) ud fra tidligere ikke-tilbuds observationer
-function estimateUnitNormalPrice(task) {
-  const normals = (task.history || [])
-    .filter(h => !h.isOffer && h.pricePerUnit != null)
-    .map(h => h.pricePerUnit);
-  if (normals.length === 0) return null;
-  return median(normals);
+function pruneHistory(task) {
+  const cutoff = Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000;
+  task.history = (task.history || []).filter(h => {
+    const ts = Date.parse(h?.ts);
+    return Number.isFinite(ts) && ts >= cutoff;
+  }).slice(-MAX_HISTORY_PER_TASK);
+}
+
+// Beregn normalpris ud fra de sidste 30 dage. Ikke-tilbudsobservationer
+// foretrækkes, men hvis der kun findes tilbud bruges medianen af dem alle.
+function priceStats(task) {
+  const entries = (task.history || []).filter(h => h && h.price != null);
+  const unitEntries = entries.filter(h => h.pricePerUnit != null && h.pricePerUnit > 0);
+  const nonOfferUnit = unitEntries.filter(h => !h.isOffer).map(h => h.pricePerUnit);
+  const allUnit = unitEntries.map(h => h.pricePerUnit);
+  const nonOfferPrices = entries.filter(h => !h.isOffer).map(h => h.price);
+  const allPrices = entries.map(h => h.price);
+
+  return {
+    days: HISTORY_DAYS,
+    samples: entries.length,
+    normalPrice: median(nonOfferPrices) ?? median(allPrices),
+    normalUnitPrice: median(nonOfferUnit) ?? median(allUnit),
+    lowestPrice: allPrices.length ? Math.min(...allPrices) : null,
+    highestPrice: allPrices.length ? Math.max(...allPrices) : null,
+    lowestUnitPrice: allUnit.length ? Math.min(...allUnit) : null,
+    highestUnitPrice: allUnit.length ? Math.max(...allUnit) : null
+  };
+}
+
+// “Reelt tilbud” = prisen er tydeligt under den observerede normalpris.
+// Kræver mindst 3 prispunkter, ellers er konklusionen ukendt.
+function assessPrice(product, stats) {
+  if (!product || stats.samples < 3) {
+    return { status: 'unknown', discountPercent: null, reason: 'For få prispunkter i de sidste 30 dage.' };
+  }
+  const useUnit = product.pricePerUnit != null && stats.normalUnitPrice != null;
+  const current = useUnit ? product.pricePerUnit : product.price;
+  const normal = useUnit ? stats.normalUnitPrice : stats.normalPrice;
+  if (normal == null || normal <= 0 || current == null) {
+    return { status: 'unknown', discountPercent: null, reason: 'Ikke nok data til at sammenligne priser.' };
+  }
+
+  const pct = Math.round((1 - current / normal) * 100);
+  if (pct >= 8) return { status: 'real_discount', discountPercent: pct, reason: `${pct}% under normalprisen` };
+  if (pct > -8) return { status: 'normal_price', discountPercent: pct, reason: 'Prisen ligger tæt på normalprisen' };
+  return { status: 'higher_than_normal', discountPercent: pct, reason: `Prisen er ${Math.abs(pct)}% over normalprisen` };
 }
 
 function pushHistory(task, entry) {
   task.history = task.history || [];
-  task.history.push(entry);
-  if (task.history.length > MAX_HISTORY_PER_TASK) task.history = task.history.slice(-MAX_HISTORY_PER_TASK);
+  task.history.push({ ...entry, ts: new Date().toISOString() });
+  pruneHistory(task);
+}
+
+// Ryd op i historik, der er ældre end 30 dage, når serveren starter.
+tasksData.tasks.forEach(pruneHistory);
+saveTasks();
+
+// AI-konfiguration er persistent på serveren (data/settings.json) eller kan
+// komme fra miljøvariabler. Scheduleren kører uden browser, så den kan ikke
+// bruge window.getAIConfig().
+function getServerAiConfig() {
+  const saved = appSettings?.aiConfig;
+  if (saved && saved.connected && saved.provider) {
+    return {
+      provider: saved.provider,
+      apiKey: saved.apiKey || undefined,
+      baseUrl: saved.baseUrl || (saved.provider === 'ollama' ? saved.ollamaUrl : undefined),
+      model: saved.model || (saved.provider === 'ollama' ? saved.ollamaModel : undefined)
+    };
+  }
+  if (process.env.GEMINI_API_KEY) return { provider: 'gemini', apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL };
+  if (process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY) return { provider: 'anthropic', apiKey: process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY, model: process.env.CLAUDE_MODEL };
+  if (process.env.OPENAI_API_KEY) return { provider: 'openai', apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL };
+  if (process.env.DEEPSEEK_API_KEY) return { provider: 'deepseek', apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL };
+  if (process.env.MISTRAL_API_KEY) return { provider: 'mistral', apiKey: process.env.MISTRAL_API_KEY, model: process.env.MISTRAL_MODEL };
+  return null;
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} tog for lang tid`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Ask the configured LLM to (1) pick the candidate that really matches the
+ * monitored query and (2) decide whether the current price is a real discount
+ * compared with the last 30 days. Always degrades gracefully to local logic.
+ */
+async function aiAssessTask(task, candidates, stats, localAssessment) {
+  const cfg = getServerAiConfig();
+  if (!cfg) return null;
+
+  const candidateJson = candidates.slice(0, 10).map(p => ({
+    id: p.id,
+    name: p.name,
+    brand: p.brand || '',
+    store: p.store,
+    size: p.size || '',
+    price: p.price,
+    pricePerUnit: p.pricePerUnit,
+    unitPriceLabel: p.unitPriceLabel || '',
+    isOffer: !!p.isOffer
+  }));
+  const historyJson = (task.history || []).slice(-24).map(h => ({
+    date: String(h.ts || '').slice(0, 10),
+    name: h.name,
+    store: h.store,
+    price: h.price,
+    pricePerUnit: h.pricePerUnit,
+    isOffer: !!h.isOffer
+  }));
+
+  const prompt = `Du er en dansk prisanalytiker. En bruger overvåger varen "${task.query}".
+
+Kandidatprodukter fundet nu (JSON):
+${JSON.stringify(candidateJson)}
+
+Observationer fra de sidste ${HISTORY_DAYS} dage (JSON):
+${JSON.stringify(historyJson)}
+
+Lokal foreløbig prisvurdering: ${JSON.stringify(localAssessment)}.
+
+Vælg kun ét af kandidatprodukterne som det, der reelt matcher "${task.query}". Vær kritisk: "mælkedrik" matcher ikke "mælk", "vindrueis" matcher ikke "vindruer", og et tilbehør matcher ikke hovedvaren.
+
+Returnér KUN en JSON-array med præcis ét objekt med felterne:
+- "selectedId": id'et fra kandidatlisten, eller null hvis ingen matcher.
+- "isCorrectProduct": true/false.
+- "productConfidence": "high", "medium" eller "low".
+- "productReason": kort dansk forklaring (maks 160 tegn).
+- "priceStatus": "real_discount", "normal_price", "higher_than_normal" eller "unknown". Brug "real_discount" kun når prisen er tydeligt lavere end normalprisen i historikken (sammenlign pricePerUnit når muligt).
+- "priceReason": kort dansk forklaring (maks 160 tegn).
+- "discountPercent": heltal eller null.
+- "normalUnitPrice": tal eller null.
+
+Brug ikke markdown og opfind ikke priser.`;
+
+  try {
+    const raw = await withTimeout(callLLM({ ...cfg, prompt }), 25000, 'AI-vurdering');
+    const parsed = extractJsonArray(raw);
+    const r = parsed && parsed[0];
+    if (!r || typeof r !== 'object') return null;
+
+    const selectedId = r.selectedId || null;
+    const selected = selectedId ? candidates.find(p => p.id === selectedId) : null;
+    const statuses = ['real_discount', 'normal_price', 'higher_than_normal', 'unknown'];
+    const status = statuses.includes(r.priceStatus) ? r.priceStatus : localAssessment.status;
+    const rawDiscount = Number(r.discountPercent);
+    const rawNormal = Number(r.normalUnitPrice);
+    const discountPercent = status === 'unknown'
+      ? null
+      : Number.isFinite(rawDiscount) ? rawDiscount : localAssessment.discountPercent;
+    const normalUnitPrice = Number.isFinite(rawNormal) && rawNormal > 0
+      ? rawNormal
+      : stats.normalUnitPrice ?? null;
+
+    return {
+      aiPowered: true,
+      selectedId: selected ? selected.id : null,
+      selectedProduct: selected ? { name: selected.name, store: selected.store, price: selected.price } : null,
+      isCorrectProduct: selected ? r.isCorrectProduct !== false : false,
+      productConfidence: ['high', 'medium', 'low'].includes(r.productConfidence) ? r.productConfidence : 'medium',
+      productReason: String(r.productReason || '').slice(0, 200),
+      status,
+      reason: String(r.priceReason || '').slice(0, 200),
+      discountPercent,
+      normalUnitPrice,
+      source: 'ai'
+    };
+  } catch (err) {
+    console.warn(`[Scheduler] AI-vurdering fejlede for "${task.query}":`, err.message);
+    return null;
+  }
 }
 
 function formatUnitPrice(item) {
   if (item.pricePerUnit == null) return '';
   const unitLabel = item.unitPriceLabel || '';
   return `${item.pricePerUnit.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unitLabel}`.trim();
+}
+
+function formatKr(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '';
+  return `${Number(value).toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`;
+}
+
+function priceVerdictLabel(status) {
+  return {
+    real_discount: 'Reelt tilbud',
+    normal_price: 'Normalpris (ikke et reelt tilbud)',
+    higher_than_normal: 'Dyrere end normalprisen',
+    unknown: 'Prisvurdering ikke mulig endnu'
+  }[status] || 'Prisvurdering ikke mulig endnu';
+}
+
+// Hent kandidater til én overvåget vare. Bruger de samme parsers/søgefunktioner
+// som resten af appen, så priser og produktnavne behandles ens overalt.
+async function fetchTaskCandidates(query, selectedChains) {
+  const chains = Array.isArray(selectedChains) ? selectedChains : [];
+  const sources = [];
+
+  if (chains.length === 0 || chains.includes('nemlig.com')) {
+    sources.push(fetchNemligSearch(query, 25).catch(err => {
+      console.warn('[Scheduler] Nemlig-søgning fejlede:', err.message);
+      return [];
+    }));
+  }
+  sources.push(fetchTjekSearch(query, 50).catch(err => {
+    console.warn('[Scheduler] Tjek-søgning fejlede:', err.message);
+    return [];
+  }));
+  sources.push(fetchShelfAtlas(query).catch(err => {
+    console.warn('[Scheduler] ShelfAtlas-søgning fejlede:', err.message);
+    return [];
+  }));
+
+  const groups = await Promise.all(sources);
+  let items = groups.flat().filter(item => item && item.price != null);
+
+  if (chains.length > 0) {
+    items = items.filter(item => chains.includes(item.store));
+  }
+
+  // Samme produkt kan optræde i flere kilder. Behold den første forekomst.
+  const seen = new Set();
+  return items.filter(item => {
+    const key = `${(item.store || '').toLowerCase()}|${(item.name || '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isTaskDue(task) {
@@ -1557,99 +1777,176 @@ function isTaskDue(task) {
 
 async function runTask(task) {
   console.log(`[Scheduler] Kører søgning for "${task.query}"...`);
+  task.lastChecked = new Date().toISOString();
+  pruneHistory(task);
+
   try {
-    const nemligItems = [];
-    const tjekItems = [];
-    const shelfItems = [];
-    const selectedChains = Array.isArray(task.chains) ? task.chains : [];
-    const filterEnabled = selectedChains.length > 0;
+    const searchQuery = cleanSearchQuery(task.query) || task.query;
+    const ingredient = {
+      name: task.query,
+      searchQuery,
+      category: inferCategory(task.query)
+    };
 
-    // Fetch nemlig (kun hvis valgt eller ingen filter)
-    if (!filterEnabled || selectedChains.includes('nemlig.com')) {
-      try {
-        await nemligSession.ensureSession();
-        const qp = new URLSearchParams({
-          query: task.query, take: '20', skip: '0', recipeCount: '0',
-          timestamp: nemligSession.timestamp, timeslotUtc: nemligSession.timeslotUtc,
-          deliveryZoneId: nemligSession.deliveryZoneId
-        });
-        const r = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${qp}`, {
-          headers: { ...NEMLIG_DEFAULT_HEADERS, 'X-Correlation-Id': crypto.randomUUID(), Authorization: `Bearer ${nemligSession.bearerToken}` }
-        });
-        const d = await r.json();
-        nemligItems.push(...(d.Products?.Products || []).map(parseNemligProduct));
-      } catch {}
+    // Prøv først den rensede søgestreng. Hvis den ikke giver et sikkert match,
+    // prøves et par kendte synonymer/entalsformer ("vindruer" -> "druer").
+    const candidates = [];
+    const seenCandidates = new Set();
+    const queries = [searchQuery, ...fallbackQueriesFor(searchQuery)].slice(0, 3);
+    for (const query of queries) {
+      const found = await fetchTaskCandidates(query, task.chains);
+      let bestScore = -9999;
+      for (const product of found) {
+        const key = `${(product.store || '').toLowerCase()}|${(product.name || '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+        if (seenCandidates.has(key)) continue;
+        seenCandidates.add(key);
+        candidates.push(product);
+        bestScore = Math.max(bestScore, scoreProductRelevance(product, ingredient));
+      }
+      if (bestScore >= 90) break;
     }
 
-    // Fetch Tjek (altid - filtreres efter)
-    try {
-      const tp = new URLSearchParams({ query: task.query, country_id: 'DK', limit: '50' });
-      const r = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${tp}`, { headers: { 'User-Agent': 'prisjagt-scheduler/1.0' } });
-      const d = await r.json();
-      tjekItems.push(...d.map(parseTjekProduct));
-    } catch {}
+    const scored = candidates
+      .map(product => ({ ...product, _relevance: scoreProductRelevance(product, ingredient) }))
+      .filter(product => product._relevance > -100)
+      .sort((a, b) => {
+        if (Math.abs(b._relevance - a._relevance) > 12) return b._relevance - a._relevance;
+        if (a.isOffer !== b.isOffer) return a.isOffer ? -1 : 1;
+        return a.price - b.price;
+      });
 
-    // Fetch ShelfAtlas (altid - filtreres efter)
-    try {
-      shelfItems.push(...await fetchShelfAtlas(task.query));
-    } catch {}
+    const top = scored.slice(0, 10);
+    const localProduct = top.find(product => product.isOffer && product._relevance >= 35) || top[0] || null;
+    const stats = priceStats(task);
+    const localPrice = assessPrice(localProduct, stats);
+    const localConfidence = !localProduct ? 'low'
+      : localProduct._relevance >= 80 ? 'high'
+      : localProduct._relevance >= 35 ? 'medium' : 'low';
 
-    let all = [...nemligItems, ...tjekItems, ...shelfItems].filter(i => i && i.price != null);
+    const localAssessment = {
+      aiPowered: false,
+      source: 'local',
+      selectedId: localProduct?.id || null,
+      selectedProduct: localProduct ? {
+        name: localProduct.name,
+        store: localProduct.store,
+        price: localProduct.price
+      } : null,
+      isCorrectProduct: !!localProduct && localProduct._relevance >= 35,
+      productConfidence: localConfidence,
+      productReason: localProduct
+        ? `Lokal søgning matchede "${localProduct.name}" (relevans ${localProduct._relevance}).`
+        : 'Ingen sikker lokal match fundet.',
+      status: localPrice.status,
+      reason: localPrice.reason,
+      discountPercent: localPrice.discountPercent,
+      normalPrice: stats.normalPrice,
+      normalUnitPrice: stats.normalUnitPrice
+    };
 
-    // Filtrer efter valgte butikker
-    if (filterEnabled) {
-      all = all.filter(i => selectedChains.includes(i.store));
-    }
+    // AI er valgfri: hvis den ikke er konfigureret eller fejler, bruges den
+    // lokale vurdering ovenfor. AI vælger den rigtige vare og bedømmer prisen.
+    const aiAssessment = top.length > 0
+      ? await aiAssessTask(task, top, stats, localAssessment)
+      : null;
+    const assessment = aiAssessment || localAssessment;
 
-    all.sort((a, b) => a.price - b.price);
+    const selectedId = assessment.selectedId || null;
+    const selected = selectedId ? top.find(product => product.id === selectedId) || null : null;
+    // AI vælger varen, men den tal-baserede prisvurdering beregnes lokalt ud fra
+    // den faktiske 30-dages historik. Det undgår gæt fra modellen.
+    const selectedPrice = assessPrice(selected, stats);
+    const finalAssessment = {
+      ...assessment,
+      selectedProduct: selected ? {
+        name: selected.name,
+        store: selected.store,
+        price: selected.price,
+        size: selected.size || ''
+      } : null,
+      isCorrectProduct: !!selected && assessment.isCorrectProduct !== false,
+      status: selectedPrice.status,
+      reason: selectedPrice.reason,
+      discountPercent: selectedPrice.discountPercent,
+      normalPrice: stats.normalPrice,
+      normalUnitPrice: stats.normalUnitPrice,
+      priceSource: '30-day-history',
+      aiPriceNote: assessment.reason || '',
+      at: new Date().toISOString(),
+      searchQuery,
+      candidateCount: top.length,
+      productScore: selected?._relevance ?? null,
+      rawOffer: !!selected?.isOffer,
+      historySamples: stats.samples
+    };
+    task.lastAssessment = finalAssessment;
 
-    const offerItems = all.filter(i => i.isOffer);
-    const bestMatch = offerItems[0] || all[0] || null;
+    if (finalAssessment.isCorrectProduct && selected) {
+      task.bestPrice = selected.price;
+      task.bestStore = selected.store;
 
-    task.lastChecked = new Date().toISOString();
-
-    if (bestMatch) {
-      // Gem snapshot i historikken
       pushHistory(task, {
-        ts: new Date().toISOString(),
-        name: bestMatch.name,
-        store: bestMatch.store,
-        price: bestMatch.price,
-        pricePerUnit: bestMatch.pricePerUnit,
-        unitPriceLabel: bestMatch.unitPriceLabel,
-        size: bestMatch.size,
-        isOffer: !!bestMatch.isOffer
+        name: selected.name,
+        store: selected.store,
+        price: selected.price,
+        pricePerUnit: selected.pricePerUnit,
+        unitPriceLabel: selected.unitPriceLabel,
+        size: selected.size,
+        isOffer: !!selected.isOffer,
+        correctProduct: true,
+        source: finalAssessment.source,
+        productScore: selected._relevance
       });
     }
 
-    if (bestMatch && bestMatch.isOffer) {
-      const prevBest = task.bestPrice;
-      task.bestPrice = bestMatch.price;
-      task.bestStore = bestMatch.store;
-      task.lastNotified = new Date().toISOString();
-      saveTasks();
+    saveTasks();
 
-      const priceStr = bestMatch.price.toLocaleString('da-DK', { minimumFractionDigits: 2 }) + ' kr';
-      const unitStr = formatUnitPrice(bestMatch);
-      const sizeStr = bestMatch.size ? ` (${bestMatch.size})` : '';
-
-      // Sammenlign med historisk normalpris pr. enhed for at vurdere om det er et reelt tilbud
-      const normalUnit = estimateUnitNormalPrice(task);
-      let savingsLine = '';
-      if (normalUnit != null && bestMatch.pricePerUnit != null && normalUnit > 0) {
-        const pct = Math.round((1 - bestMatch.pricePerUnit / normalUnit) * 100);
-        if (pct > 0) savingsLine = ` — ${pct}% lavere end normalprisen (${normalUnit.toLocaleString('da-DK', { minimumFractionDigits: 2 })} kr/${ (bestMatch.unitPriceLabel || 'kg').replace('kr/', '') || 'kg' })`;
+    const shouldNotify = finalAssessment.isCorrectProduct && selected && selected.isOffer;
+    if (!shouldNotify) {
+      if (selected?.isOffer && !finalAssessment.isCorrectProduct) {
+        console.warn(`[Scheduler] Sprang notifikation over for "${task.query}": fundet vare matcher ikke søgningen — ${finalAssessment.productReason}`);
+      } else {
+        console.log(`[Scheduler] Ingen relevant tilbudsvare for "${task.query}" lige nu.`);
       }
-
-      const msg = `${task.query} er på tilbud!\n${bestMatch.name}${sizeStr}\n${priceStr} i ${bestMatch.store}${unitStr ? ` — ${unitStr}` : ''}${savingsLine}`;
-      await sendAllNotifications(`Tilbud: ${task.query}`, msg);
-      console.log(`[Scheduler] Tilbud fundet for "${task.query}": ${priceStr}${unitStr ? ' (' + unitStr + ')' : ''} i ${bestMatch.store}${savingsLine}`);
-    } else {
-      task.bestPrice = bestMatch?.price || null;
-      task.bestStore = bestMatch?.store || null;
-      saveTasks();
-      console.log(`[Scheduler] Ingen tilbud for "${task.query}" lige nu.`);
+      return;
     }
+
+    const unitShort = (selected.unitPriceLabel || 'kr/kg').replace(/^kr\//, '') || 'kg';
+    const sizeStr = selected.size ? ` (${selected.size})` : '';
+    const priceStr = formatKr(selected.price);
+    const unitStr = formatUnitPrice(selected);
+    const verdict = priceVerdictLabel(finalAssessment.status);
+    const discountStr = Number.isFinite(finalAssessment.discountPercent) && Math.abs(finalAssessment.discountPercent) >= 1
+      ? `, ${Math.abs(finalAssessment.discountPercent)}% ${finalAssessment.discountPercent >= 0 ? 'under' : 'over'} normalprisen`
+      : '';
+    const normalStr = finalAssessment.normalUnitPrice != null
+      ? `Normalpris: ${finalAssessment.normalUnitPrice.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr/${unitShort}. `
+      : '';
+    const productCheckStr = finalAssessment.aiPowered
+      ? `AI-varetjek: ${finalAssessment.productReason}`
+      : `Lokalt varetjek: ${finalAssessment.productReason}`;
+    const priceCheckStr = `Prisvurdering: ${verdict}${discountStr}. ${normalStr}${finalAssessment.reason || ''}`;
+
+    const msg = [
+      `${task.query} — ${verdict}`,
+      `${selected.name}${sizeStr} i ${selected.store}`,
+      `${priceStr}${unitStr ? ` — ${unitStr}` : ''}`,
+      priceCheckStr,
+      productCheckStr
+    ].filter(Boolean).join('\n');
+
+    const title = finalAssessment.status === 'real_discount'
+      ? `Reelt tilbud: ${task.query}`
+      : finalAssessment.status === 'normal_price'
+        ? `Prischeck: ${task.query} (normalpris)`
+        : finalAssessment.status === 'higher_than_normal'
+          ? `Prischeck: ${task.query} (over normalpris)`
+          : `Tilbud: ${task.query}`;
+
+    await sendAllNotifications(title, msg);
+    task.lastNotified = new Date().toISOString();
+    saveTasks();
+    console.log(`[Scheduler] ${title}: ${priceStr} i ${selected.store} — ${verdict}${unitStr ? ` (${unitStr})` : ''}`);
   } catch (err) {
     console.error(`[Scheduler] Fejl for "${task.query}":`, err.message);
     task.lastChecked = new Date().toISOString();
@@ -1680,6 +1977,23 @@ app.get('/api/tasks/chains', (req, res) => {
 
 app.get('/api/tasks', (req, res) => {
   res.json(tasksData);
+});
+
+// 30-dages prishistorik for én overvåget vare, inkl. beregnet normalpris og
+// seneste AI/lokal vurdering.
+app.get('/api/tasks/:id/history', (req, res) => {
+  const task = tasksData.tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'Opgave ikke fundet' });
+  pruneHistory(task);
+  saveTasks();
+  res.json({
+    taskId: task.id,
+    query: task.query,
+    days: HISTORY_DAYS,
+    history: task.history || [],
+    stats: priceStats(task),
+    lastAssessment: task.lastAssessment || null
+  });
 });
 
 app.post('/api/tasks', (req, res) => {

@@ -1593,6 +1593,119 @@ body {
 .task-unit-label {
   color: var(--text-secondary, #6b7280);
 }
+.task-selected-product {
+  font-weight: 600;
+  color: var(--text-strong, #111827);
+}
+
+/* AI / prisvurdering på overvågningskort */
+.task-assessment {
+  margin-top: 10px;
+  padding: 9px 11px;
+  background: var(--bg-subtle, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 9px;
+  font-size: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.task-assessment-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.task-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.task-ai-badge.local {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+.task-verdict {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  width: fit-content;
+}
+.task-verdict.good {
+  background: #dcfce7;
+  color: #15803d;
+}
+.task-verdict.warn {
+  background: #fef3c7;
+  color: #b45309;
+}
+.task-verdict.bad {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.task-verdict.neutral {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+.task-assessment-reason {
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.35;
+}
+
+/* Klikbar prishistorik (sidste 30 dage) */
+.task-history {
+  margin-top: 10px;
+  font-size: 0.78rem;
+}
+.task-history summary {
+  cursor: pointer;
+  color: var(--primary-color, #4f46e5);
+  font-weight: 600;
+  outline: none;
+}
+.task-history summary:hover {
+  text-decoration: underline;
+}
+.task-history-list {
+  margin-top: 8px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.task-history-row {
+  display: grid;
+  grid-template-columns: 3rem 1fr auto;
+  gap: 8px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  align-items: baseline;
+}
+.task-history-row:last-child {
+  border-bottom: none;
+}
+.task-history-unit {
+  margin-left: 6px;
+  color: var(--text-secondary, #6b7280);
+}
+.task-history-offer {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
 
 /* Task chain selector */
 .task-chains-section {
