@@ -48,6 +48,12 @@
         </svg>
         Søg tilbud
       </button>
+      <button class="nav-tab" id="tab-btn-list" data-target="tab-content-list">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="tab-icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z" />
+        </svg>
+        Indkøbsliste
+      </button>
       <button class="nav-tab" id="tab-btn-recipe" data-target="tab-content-recipe">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="tab-icon">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
@@ -198,6 +204,96 @@
       </div>
     </main>
     </div> <!-- END OF TAB: Search Content -->
+
+    <!-- TAB: Indkøbsliste Content -->
+    <div id="tab-content-list" class="tab-pane">
+      <section class="search-section">
+        <div class="search-card">
+          <div class="recipe-input-group">
+            <h2 class="section-title">Søg efter en hel indkøbsliste</h2>
+            <p class="section-desc">Indsæt din liste her — gerne med mængder, punkttegn og mange varer. Mængderne ignoreres, og PrisJagt finder de rigtige varer på tværs af butikker. Virker både med og uden AI.</p>
+          </div>
+          <form id="list-form" class="list-form">
+            <div class="list-input-wrapper">
+              <textarea id="list-input" rows="10" placeholder="Hør frø, solsikke kerner 800 g&#10;• 2 ps 5 kg hvedemel&#10;• 3 kg yoghurt eller skyr&#10;• 14 liter mælk&#10;• FRUGT: æbler, clementiner, vindruer" autocomplete="off"></textarea>
+              <button type="button" id="list-clear-btn" class="clear-button list-clear-btn" aria-label="Ryd listen">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="list-options-row">
+              <label class="list-ai-label">
+                <input type="checkbox" id="list-use-ai">
+                <span>Brug AI til at forstå listen (valgfrit)</span>
+              </label>
+              <span id="list-ai-hint" class="list-ai-hint"></span>
+              <span class="list-spacer"></span>
+              <button type="button" id="list-example-btn" class="submit-button secondary-btn small-btn">Indsæt eksempel</button>
+            </div>
+            <div class="list-actions-row">
+              <button type="submit" class="submit-button" id="list-submit-btn">Find priser for hele listen</button>
+              <span id="list-count" class="list-count"></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section id="list-status-section" class="recipe-status-section hidden">
+        <div class="recipe-status-card">
+          <div class="spinner-container">
+            <div class="custom-spinner"></div>
+          </div>
+          <div class="status-steps">
+            <div class="status-step" id="list-step-read">1. Læser indkøbslisten...</div>
+            <div class="status-step" id="list-step-parse">2. Forstår varerne...</div>
+            <div class="status-step" id="list-step-search">3. Søger priser på tværs af butikker...</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="list-parse-info" class="list-parse-info hidden"></section>
+      <section id="list-questions-section" class="list-questions-section hidden"></section>
+
+      <section id="list-results-section" class="recipe-results-section hidden">
+        <div class="recipe-dashboard">
+          <div class="dashboard-card">
+            <div class="dash-label">Estimeret total (billigst)</div>
+            <div class="dash-val" id="list-total-price">0.00 kr</div>
+            <div class="dash-sub" id="list-matched-count">0 af 0 varer fundet</div>
+          </div>
+          <div class="dashboard-card">
+            <div class="dash-label">Usikre varer</div>
+            <div class="dash-val text-accent" id="list-uncertain-count">0</div>
+            <div class="dash-sub">Vælg en variant eller et alternativ</div>
+          </div>
+          <div class="dashboard-card">
+            <div class="dash-label">Anbefalet butik</div>
+            <div class="dash-val text-green" id="list-recommended-store">Ingen match</div>
+            <div class="dash-sub" id="list-store-coverage">Flest matchende varer ét sted</div>
+          </div>
+        </div>
+
+        <div class="recipe-controls">
+          <button class="toggle-btn" id="list-only-uncertain" data-active="false">
+            <span class="dot"></span>
+            Kun usikre varer
+          </button>
+          <span class="list-spacer"></span>
+          <button class="submit-button secondary-btn" id="list-copy-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="btn-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0A2.25 2.25 0 0 1 13.5 3.75h-3a2.25 2.25 0 0 1-2.166-1.862m7.332 0a9 9 0 0 1-7.332 0M21 12c0 1.2-.405 2.28-1.09 3.13L18 12V9m-8.1 10.5H5.25A2.25 2.25 0 0 1 3 17.25V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25v2.25" />
+            </svg>
+            Kopiér indkøbsliste
+          </button>
+        </div>
+
+        <p id="list-source-note" class="recipe-source-note hidden"></p>
+
+        <h3 class="subsection-title">Varer og bedste priser</h3>
+        <div id="list-results-grid" class="recipe-ingredients-grid"></div>
+      </section>
+    </div> <!-- END OF TAB: Indkøbsliste Content -->
 
     <!-- TAB: Recipe Content -->
     <div id="tab-content-recipe" class="tab-pane">
@@ -553,6 +649,7 @@
 
   <script src="index.js"></script>
   <script src="settings.js"></script>
+  <script src="list.js"></script>
   <script src="recipe.js"></script>
   <script src="tasks.js"></script>
 </body>

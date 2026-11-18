@@ -1,5 +1,13 @@
 # macOS
 .DS_Store
 
+# Dependencies (installér med npm install / npm ci)
+node_modules/
+
+# Lokal konfiguration og hemmeligheder
+.env
+.env.*
+!.env.example
+
 # Data (vareovervågning + notifikationskonfiguration - indeholder nøgler)
 data/

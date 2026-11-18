@@ -14,9 +14,11 @@ let availableChains = [];
 
 // --- DOM References ---
 const tabSearchBtn = document.getElementById('tab-btn-search');
+const tabListBtn = document.getElementById('tab-btn-list');
 const tabRecipeBtn = document.getElementById('tab-btn-recipe');
 const tabTasksBtn = document.getElementById('tab-btn-tasks');
 const tabSearchContent = document.getElementById('tab-content-search');
+const tabListContent = document.getElementById('tab-content-list');
 const tabRecipeContent = document.getElementById('tab-content-recipe');
 const tabTasksContent = document.getElementById('tab-content-tasks');
 
@@ -59,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupTabNavigation() {
   const tabs = [
     { btn: tabSearchBtn, content: tabSearchContent },
+    { btn: tabListBtn, content: tabListContent },
     { btn: tabRecipeBtn, content: tabRecipeContent },
     { btn: tabTasksBtn, content: tabTasksContent }
   ];

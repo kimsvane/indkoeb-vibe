@@ -6,6 +6,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import { callLLM } from './lib/llm.js';
+import {
+  parseShoppingListHeuristic,
+  buildListParsePrompt,
+  extractJsonArray,
+  normalizeParsedItems
+} from './lib/list-parser.js';
 
 dotenv.config();
 
@@ -542,123 +548,149 @@ function parseNemligProduct(item) {
   };
 }
 
+// --- Fælles søgelogik ---
+// Bruges af både enkelt-søgning og den store indkøbsliste, så resultater
+// behandles ens uanset hvor de kommer fra.
+
+// Fjern mængder/enheder fra en søgestreng ("2 ps 5 kg hvedemel" -> "hvedemel").
+// Beskrivende ord som "frisk", "røget" og "frosne" bevares.
+function cleanSearchQuery(raw) {
+  if (raw == null) return '';
+  let q = String(raw)
+    .replace(/[•*]/g, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?\s*(?:kg|g|l|liter|dl|cl|ml|stk|styks|pk|ps|pakke|pakker|pose|poser|glas|bundt|bundter|dåse|dåser|fed|hele)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return q || String(raw).trim();
+}
+
+async function fetchNemligSearch(query, take = 40) {
+  try {
+    await nemligSession.ensureSession();
+    const queryParams = new URLSearchParams({
+      query,
+      take: String(take),
+      skip: "0",
+      recipeCount: "0",
+      timestamp: nemligSession.timestamp,
+      timeslotUtc: nemligSession.timeslotUtc,
+      deliveryZoneId: nemligSession.deliveryZoneId
+    });
+
+    const doFetch = () => fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${queryParams}`, {
+      headers: {
+        ...NEMLIG_DEFAULT_HEADERS,
+        "X-Correlation-Id": crypto.randomUUID(),
+        "Authorization": `Bearer ${nemligSession.bearerToken}`
+      }
+    });
+
+    let response = await doFetch();
+    if (response.status === 401) {
+      console.warn("[Search] Nemlig returned 401. Refreshing token...");
+      nemligSession.invalidateSession();
+      await nemligSession.ensureSession();
+      response = await doFetch();
+    }
+    if (!response.ok) throw new Error(`Nemlig HTTP status ${response.status}`);
+    const data = await response.json();
+    return (data.Products?.Products || []).map(parseNemligProduct);
+  } catch (err) {
+    console.error("[Search] Nemlig search failed:", err.message);
+    return [];
+  }
+}
+
+async function fetchTjekSearch(query, limit = 100) {
+  try {
+    const params = new URLSearchParams({ query, country_id: "DK", limit: String(limit) });
+    const response = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${params}`, {
+      headers: { 'User-Agent': 'grocery-aggregator/1.0' }
+    });
+    if (!response.ok) throw new Error(`Tjek HTTP status ${response.status}`);
+    const data = await response.json();
+    return (Array.isArray(data) ? data : []).map(parseTjekProduct);
+  } catch (err) {
+    console.error("[Search] Tjek search failed:", err.message);
+    return [];
+  }
+}
+
+// Kortere søgestreng hvis den præcise form ikke gav noget ("frisk mozzarella" -> "mozzarella").
+function fallbackQueries(query) {
+  const words = query.split(/\s+/).filter(w => w.length > 2);
+  const candidates = [];
+  if (words.length >= 3) candidates.push(words.slice(-2).join(' '));
+  if (words.length >= 2) candidates.push(words[words.length - 1]);
+  return [...new Set(candidates)].slice(0, 1);
+}
+
+async function runStoreSearch(query, location, take, limit) {
+  const [nemligItems, tjekItems, shelfItems] = await Promise.all([
+    fetchNemligSearch(query, take),
+    fetchTjekSearch(query, limit),
+    fetchShelfAtlas(query, location)
+  ]);
+  return [...nemligItems, ...tjekItems, ...shelfItems];
+}
+
+async function searchStorePrices(query, location = null, { take = 40, limit = 100 } = {}) {
+  const cacheKey = `store:${query}:${take}:${limit}`;
+  const cached = getCachedSearch(cacheKey);
+  if (cached) return cached;
+
+  let combined = await runStoreSearch(query, location, take, limit);
+  if (combined.length === 0) {
+    for (const alt of fallbackQueries(query)) {
+      combined = await runStoreSearch(alt, location, take, limit);
+      if (combined.length > 0) break;
+    }
+  }
+
+  if (location) attachDistances(combined, location.lat, location.lon);
+
+  combined.sort((a, b) => {
+    if (a.price === null) return 1;
+    if (b.price === null) return -1;
+    return a.price - b.price;
+  });
+
+  setCachedSearch(cacheKey, combined);
+  return combined;
+}
+
 // --- Express Route for Search ---
 app.get('/api/search', async (req, res) => {
-  const query = req.query.q;
-  if (!query) {
+  if (!req.query.q) {
     return res.status(400).json({ error: "Søgeord mangler" });
   }
 
+  const query = cleanSearchQuery(req.query.q);
   const location = parseLocation(req.query.lat, req.query.lon);
 
   console.log(`[Search] New query received: "${query}"${location ? ` (location ${location.lat},${location.lon})` : ''}`);
-  
-  const results = [];
-  
-  // 1. Fetch from Nemlig.com
-  const fetchNemlig = async () => {
-    try {
-      await nemligSession.ensureSession();
-      const queryParams = new URLSearchParams({
-        query,
-        take: "40",
-        skip: "0",
-        recipeCount: "0",
-        timestamp: nemligSession.timestamp,
-        timeslotUtc: nemligSession.timeslotUtc,
-        deliveryZoneId: nemligSession.deliveryZoneId
-      });
-      
-      const response = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${queryParams}`, {
-        headers: {
-          ...NEMLIG_DEFAULT_HEADERS,
-          "X-Correlation-Id": crypto.randomUUID(),
-          "Authorization": `Bearer ${nemligSession.bearerToken}`
-        }
-      });
-      
-      if (response.status === 401) {
-        console.warn("[Search] Nemlig returned 401. Refreshing token...");
-        nemligSession.invalidateSession();
-        await nemligSession.ensureSession();
-        // Retry
-        const responseRetry = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${queryParams}`, {
-          headers: {
-            ...NEMLIG_DEFAULT_HEADERS,
-            "X-Correlation-Id": crypto.randomUUID(),
-            "Authorization": `Bearer ${nemligSession.bearerToken}`
-          }
-        });
-        const data = await responseRetry.json();
-        return (data.Products?.Products || []).map(parseNemligProduct);
-      }
-      
-      const data = await response.json();
-      return (data.Products?.Products || []).map(parseNemligProduct);
-    } catch (err) {
-      console.error("[Search] Nemlig search failed:", err.message);
-      return []; // Return empty list on failure rather than crashing
-    }
-  };
-
-  // 2. Fetch from eTilbudsavis/Tjek API
-  const fetchTjek = async () => {
-    try {
-      const params = new URLSearchParams({
-        query,
-        country_id: "DK",
-        limit: "100" // Fetch a high number to cover various stores
-      });
-      
-      const response = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${params}`, {
-        headers: {
-          'User-Agent': 'grocery-aggregator/1.0'
-        }
-      });
-      
-      if (!response.ok) throw new Error(`Tjek HTTP status ${response.status}`);
-      const data = await response.json();
-      return data.map(parseTjekProduct);
-    } catch (err) {
-      console.error("[Search] Tjek search failed:", err.message);
-      return [];
-    }
-  };
 
   try {
-    // Run both searches in parallel (ShelfAtlas er valgfri og returnerer [] uden nøgle)
-    const [nemligItems, tjekItems, shelfItems] = await Promise.all([
-      fetchNemlig(),
-      fetchTjek(),
-      fetchShelfAtlas(query, location)
-    ]);
-    
-    // Combine items
-    const combined = [...nemligItems, ...tjekItems, ...shelfItems];
-    
-    // Attach distance to nearest store branch when a user location is provided
-    // (ShelfAtlas-resultater har allerede distanceKm; nemlig beholdes som null)
-    if (location) attachDistances(combined, location.lat, location.lon);
+    const combined = await searchStorePrices(query, location, { take: 40, limit: 100 });
 
-    // Sort: cheapest first. If price is null, push to the end.
-    combined.sort((a, b) => {
-      if (a.price === null) return 1;
-      if (b.price === null) return -1;
-      return a.price - b.price;
-    });
+    // Tjek's keyword search is loose and can return unrelated flyers (e.g. a
+    // chocolate bar for "mælk"). Drop clearly irrelevant hits, but keep the raw
+    // list if nothing scores positively so a search never becomes empty.
+    const searchIngredient = { name: query, searchQuery: query };
+    const scored = combined.map(r => ({
+      ...r,
+      matchScore: scoreProductRelevance(r, searchIngredient)
+    }));
+    const relevant = scored.filter(r => r.matchScore > 0);
+    const results = relevant.length ? relevant : scored;
 
-    // Collect unique categories (sorted, nulls excluded)
-    const categories = [...new Set(combined.map(r => r.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'da'));
+    const categories = [...new Set(results.map(r => r.category).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'da'));
 
-    const organicCount = combined.filter(r => r.isOrganic).length;
-    console.log(`[Search] Completed query: "${query}". Nemlig: ${nemligItems.length}, Tjek: ${tjekItems.length}, Total: ${combined.length}, Organic: ${organicCount}, Categories: ${categories.join(', ')}`);
-    
-    res.json({
-      query,
-      resultsCount: combined.length,
-      categories,
-      results: combined
-    });
+    console.log(`[Search] Completed query: "${query}". Total: ${results.length} (raw ${combined.length}), Organic: ${results.filter(r => r.isOrganic).length}`);
+
+    res.json({ query, resultsCount: results.length, categories, results });
   } catch (error) {
     console.error("[Search] Aggregation error:", error);
     res.status(500).json({ error: "Fejl under søgning. Prøv igen." });
@@ -874,6 +906,29 @@ ${truncatedText}`;
 });
 
 // --- Relevance Scoring for Recipe Ingredients ---
+// Word-boundary match that works with Danish letters (\b doesn't handle æøå).
+// "mælk" matches "Mælk" and "letmælk 1,5%" only as a compound (handled separately).
+function containsWholeWord(text, token) {
+  if (!token) return false;
+  let from = 0;
+  while (from <= text.length - token.length) {
+    const i = text.indexOf(token, from);
+    if (i === -1) return false;
+    const before = i === 0 ? '' : text[i - 1];
+    const after = text[i + token.length] || '';
+    if (!before || !/[\p{L}\p{N}]/u.test(before)) {
+      if (!after || !/[\p{L}\p{N}]/u.test(after)) return true;
+    }
+    from = i + 1;
+  }
+  return false;
+}
+
+const DANISH_CHAIN_HINTS = [
+  'nemlig', 'rema', 'netto', 'føtex', 'foetex', 'bilka', 'lidl', 'meny',
+  'spar', 'coop', 'brugsen', 'kvickly', '365', 'fakta', 'abcd', 'kiwi'
+];
+
 // Scores a product hit against an ingredient object.
 // Returns a number: higher = more relevant.
 function scoreProductRelevance(product, ingredient) {
@@ -910,20 +965,14 @@ function scoreProductRelevance(product, ingredient) {
   
   // Global penalized terms (deli/processed forms when looking for fresh ingredients)
   const FRESH_CATEGORIES = ['kød', 'fisk', 'mejeri'];
+  // NOTE: We don't include 'frys' here so frozen meat/fish can be matched if needed.
+  const DELI_TERMS = ['pålæg', 'pålækker', 'skiver', 'skåret', 'skiveskåret', 'røget', 'tørret', 'blandede', 'tilberedt', 'konserve', 'dåse', 'kødboller', 'pølse', 'paté', 'leverpostej', 'tartelet'];
   if (FRESH_CATEGORIES.includes(ingredient.category)) {
-    // Check if user is explicitly searching for deli products in the recipe (e.g. "baconskiver", "røget laks")
-    const isIngredientDeli = searchTokens.some(t => 
-      t.includes('pålæg') || 
-      t.includes('pålækker') || 
-      t.includes('skive') || 
-      t.includes('skiver') || 
-      t.includes('røget') || 
-      t.includes('tørret')
-    );
-    
+    // Don't penalize deli forms when the ingredient itself is a deli product,
+    // e.g. "morgenmadspølser", "spegepølser" or "røget laks".
+    const isIngredientDeli = searchTokens.some(t => DELI_TERMS.some(term => t.includes(term)));
+
     if (!isIngredientDeli) {
-      // NOTE: We don't include 'frys' here so frozen meat/fish can be matched if needed.
-      const DELI_TERMS = ['pålæg', 'pålækker', 'skiver', 'skåret', 'skiveskåret', 'røget', 'tørret', 'blandede', 'tilberedt', 'konserve', 'dåse', 'kødboller', 'pølse', 'paté', 'leverpostej', 'tartelet'];
       for (const term of DELI_TERMS) {
         if (
           productName.includes(term) ||
@@ -937,23 +986,56 @@ function scoreProductRelevance(product, ingredient) {
     }
   }
 
-  // Reward: exact search token matches in product name (stronger for the main word)
-  for (const token of searchTokens) {
-    if (token.length < 3) continue; // Skip very short tokens ("og", "af" etc)
-    if (productName.includes(token)) {
-      score += token.length >= 4 ? 50 : 30;
+  // Reward: whole-word matches count much more than matches inside compound words.
+  // Example: "Mælk" beats "mælkedrik" and "Kakaomælk" when searching for "mælk".
+  const STOPWORDS = new Set(['og', 'af', 'i', 'på', 'til', 'med', 'el', 'eller', 'et', 'en']);
+  const meaningfulTokens = searchTokens.filter(t => t.length >= 2 && !STOPWORDS.has(t));
+  for (const token of meaningfulTokens) {
+    if (containsWholeWord(productName, token)) {
+      score += token.length >= 4 ? 70 : 55;
+    } else if (productName.includes(token)) {
+      score += 35; // compound word ("skummetmælk", "solsikkekerner")
     }
+  }
+
+  // The head noun (last word) matters most in Danish: "Snack peberfrugter"
+  // must not be satisfied by a product that only contains "snack".
+  const head = meaningfulTokens[meaningfulTokens.length - 1];
+  if (head) {
+    const headMatch = containsWholeWord(productName, head) || productName.includes(head);
+    if (headMatch) score += 30;
+    else if (meaningfulTokens.length >= 2) score -= 110;
+  }
+
+  // Bonus: the product name starts with (or equals) the searched phrase.
+  const searchPhrase = meaningfulTokens.join(' ');
+  if (searchPhrase && (productName === searchPhrase || productName.startsWith(searchPhrase))) {
+    score += 25;
   }
 
   // Penalty: product is a derivative/processed form (creme, snack, dressing, saft,
   // juice, sauce, suppe, pålæg, postej) of the searched item — usually NOT what the
   // recipe wants. Only penalize when the query itself doesn't contain that word.
-  const MODIFIER_TERMS = ['creme', 'snack', 'dressing', 'saft', 'juice', 'sauce', 'suppe', 'pålæg', 'postej'];
+  const MODIFIER_TERMS = [
+    'creme', 'snack', 'dressing', 'saft', 'juice', 'sauce', 'suppe', 'pålæg',
+    'postej', 'drik', 'drikke', 'kakao', 'chokolade', 'vanilje', 'jordbær',
+    'pulver', 'blanding'
+  ];
   const queryHas = (t) => searchTokens.some(tok => tok.includes(t) || t.includes(tok));
   for (const term of MODIFIER_TERMS) {
     if (productName.includes(term) && !queryHas(term)) {
       score -= 45;
     }
+  }
+
+  // "Vindrueis" is ice cream and "Vindruekerneolie" is oil — neither is fruit.
+  // Short dessert words need suffix checks so ordinary words like "frisk" or
+  // "fisk" are not penalized by a naive substring match.
+  if (productName.endsWith('is') && !searchTokens.some(t => t === 'is')) {
+    score -= 90;
+  }
+  if (productName.includes('olie') && !queryHas('olie')) {
+    score -= 90;
   }
 
   // Bonus: product category matches ingredient category
@@ -972,202 +1054,244 @@ function scoreProductRelevance(product, ingredient) {
   // Small bonus for being on offer (tie-breaker, not primary)
   if (product.isOffer) score += 2;
 
+  // Tjek also returns flyers from shops far outside the usual Danish chains.
+  // Mild penalty so relevant Danish-chain hits win when scores are otherwise equal.
+  const store = (product.store || '').toLowerCase();
+  if (store && !DANISH_CHAIN_HINTS.some(chain => store.includes(chain))) {
+    score -= 12;
+  }
+
   return score;
 }
 
-// 3. Search and aggregate prices for a list of ingredients
+// --- Batch price aggregation (recipe + shopping list) ---
+
+// Search, score and aggregate a list of items. Shared by /api/recipe/prices
+// and /api/list/search so both flows get identical matching behaviour.
+async function aggregateIngredientPrices(normalizedIngredients, location = null) {
+  const tasks = normalizedIngredients.map(ing => async () => {
+    // Score a candidate query against the ingredient, so we can tell whether a
+    // shorter/singular fallback is actually a better match than the raw text.
+    const tryQuery = async (query) => {
+      const results = await searchStorePrices(query, location, { take: 25, limit: 40 });
+      const scoredIngredient = { ...ing, searchQuery: query };
+      const best = results.reduce(
+        (max, r) => Math.max(max, scoreProductRelevance(r, scoredIngredient)),
+        -9999
+      );
+      return { query, results, best };
+    };
+
+    const primaryQuery = ing.searchQuery || ing.name;
+    let chosen = await tryQuery(primaryQuery);
+
+    // Singular/compound variants from the parser help when the plural form
+    // ("morgenmadspølser", "vindruer") isn't used in product catalogs. Only try
+    // them when the primary search is weak, to keep the extra requests limited.
+    if (chosen.best < 45) {
+      for (const alt of (ing.fallbackQueries || []).slice(0, 2)) {
+        const candidate = await tryQuery(alt);
+        if (candidate.best > chosen.best + 5) chosen = candidate;
+        if (chosen.best >= 95) break;
+      }
+    }
+
+    return {
+      ingredient: { ...ing, searchQuery: chosen.query },
+      results: chosen.results
+    };
+  });
+
+  // Max 3 concurrent searches to avoid hammering the upstream APIs.
+  const searchResults = await limitParallel(tasks, 3);
+
+  const ingredients = searchResults.map(({ ingredient, results }) => {
+    const withPrice = results.filter(r => r.price !== null);
+
+    // Tjek mangler koordinater (bruger vores butiksdata); ShelfAtlas har
+    // allerede distanceKm; nemlig forbliver null (levering).
+    const located = location
+      ? withPrice.map(r => ({
+          ...r,
+          distanceKm: r.source === 'tjek'
+            ? nearestStoreDistanceKm(r.store, location.lat, location.lon)
+            : (r.distanceKm ?? null)
+        }))
+      : withPrice;
+
+    const scored = located
+      .map(r => ({ ...r, _score: scoreProductRelevance(r, ingredient) }))
+      .filter(r => r._score > -9999);
+
+    scored.sort((a, b) => {
+      if (b._score !== a._score) return b._score - a._score;
+      return (a.price || 99999) - (b.price || 99999);
+    });
+
+    const bestScore = scored.length ? scored[0]._score : -9999;
+    const confidence = bestScore === -9999 ? 'low'
+      : bestScore >= 95 ? 'high'
+      : bestScore >= 45 ? 'medium' : 'low';
+
+    // Public results: keep the score as readable metadata for the UI.
+    const clean = scored.map(r => {
+      const { _score, ...product } = r;
+      return { ...product, matchScore: _score };
+    });
+
+    return {
+      ingredient: ingredient.name,
+      itemId: ingredient.id || null,
+      searchQuery: ingredient.searchQuery,
+      category: ingredient.category,
+      amount: ingredient.amount ?? null,
+      unit: ingredient.unit ?? null,
+      alternativesForQuery: ingredient.alternatives || [],
+      question: ingredient.question || null,
+      note: ingredient.note || '',
+      bestMatch: clean[0] || null,
+      organicOption: clean.find(r => r.isOrganic) || null,
+      alternatives: clean.slice(0, 60),
+      confidence,
+      uncertain: confidence !== 'high' || clean.length < 2
+    };
+  });
+
+  // Anbefal butikken der dækker flest varer.
+  const storeCount = {};
+  let matchedCount = 0;
+  ingredients.forEach(item => {
+    if (item.bestMatch) {
+      matchedCount++;
+      const store = item.bestMatch.store;
+      storeCount[store] = (storeCount[store] || 0) + 1;
+    }
+  });
+
+  let recommendedStore = "Ingen match";
+  let maxMatches = 0;
+  for (const [store, count] of Object.entries(storeCount)) {
+    if (count > maxMatches) {
+      maxMatches = count;
+      recommendedStore = store;
+    }
+  }
+
+  const totalEstimate = ingredients.reduce((acc, item) => acc + (item.bestMatch?.price || 0), 0);
+  const organicTotalEstimate = ingredients.reduce((acc, item) => {
+    const match = item.organicOption || item.bestMatch;
+    return acc + (match?.price || 0);
+  }, 0);
+
+  return {
+    ingredients,
+    shelfAtlasActive: !!process.env.SHELFATLAS_API_KEY,
+    summary: {
+      totalEstimate: parseFloat(totalEstimate.toFixed(2)),
+      organicTotalEstimate: parseFloat(organicTotalEstimate.toFixed(2)),
+      matchedCount,
+      totalCount: ingredients.length,
+      uncertainCount: ingredients.filter(i => i.uncertain).length,
+      recommendedStore,
+      storeMatches: maxMatches
+    }
+  };
+}
+
+// 3. Search and aggregate prices for a list of recipe ingredients
 app.post('/api/recipe/prices', async (req, res) => {
-  const { ingredients } = req.body;
-  
-  if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
+  const { ingredients } = req.body || {};
+
+  if (!Array.isArray(ingredients) || ingredients.length === 0) {
     return res.status(400).json({ error: "Ingredienser skal angives som et array" });
   }
 
   const location = parseLocation(req.body.lat, req.body.lon);
-  
-  // Normalize: support both old string array and new object array format
-  const normalizedIngredients = ingredients.map(i => {
-    if (typeof i === 'string') {
-      return { name: i, searchQuery: i, category: 'andet', excludeTerms: [] };
-    }
-    return i;
-  });
+  const normalized = normalizeParsedItems(ingredients);
+  if (normalized.length === 0) {
+    return res.status(400).json({ error: "Ingen gyldige ingredienser" });
+  }
 
-  console.log(`[Recipe Prices] Beginning aggregate search for: ${normalizedIngredients.map(i => i.name).join(', ')}`);
-  
-  // Re-use internal API search logic
-  const searchForIngredient = async (ingredient) => {
-    // Check cache first
-    const cached = getCachedSearch(ingredient);
-    if (cached) {
-      console.log(`[Recipe Prices] Cache hit for "${ingredient}"`);
-      return cached;
-    }
-    
-    try {
-      // 1. Fetch Nemlig
-      await nemligSession.ensureSession();
-      const nemligParams = new URLSearchParams({
-        query: ingredient,
-        take: "25",
-        skip: "0",
-        recipeCount: "0",
-        timestamp: nemligSession.timestamp,
-        timeslotUtc: nemligSession.timeslotUtc,
-        deliveryZoneId: nemligSession.deliveryZoneId
-      });
-      
-      let nemligRes = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${nemligParams}`, {
-        headers: {
-          ...NEMLIG_DEFAULT_HEADERS,
-          "X-Correlation-Id": crypto.randomUUID(),
-          "Authorization": `Bearer ${nemligSession.bearerToken}`
-        }
-      });
-      
-      if (nemligRes.status === 401) {
-        nemligSession.invalidateSession();
-        await nemligSession.ensureSession();
-        nemligRes = await fetch(`${NEMLIG_SEARCH_URL}/searchgateway/api/search?${nemligParams}`, {
-          headers: {
-            ...NEMLIG_DEFAULT_HEADERS,
-            "X-Correlation-Id": crypto.randomUUID(),
-            "Authorization": `Bearer ${nemligSession.bearerToken}`
-          }
-        });
-      }
-      
-      const nemligData = await nemligRes.json();
-      const nemligItems = (nemligData.Products?.Products || []).map(parseNemligProduct);
-      
-      // 2. Fetch Tjek
-      const tjekParams = new URLSearchParams({
-        query: ingredient,
-        country_id: "DK",
-        limit: "40"
-      });
-      const tjekRes = await fetch(`https://api.etilbudsavis.dk/v2/offers/search?${tjekParams}`, {
-        headers: { 'User-Agent': 'grocery-aggregator/1.0' }
-      });
-      
-      const tjekData = await tjekRes.json();
-      const tjekItems = tjekData.map(parseTjekProduct);
+  console.log(`[Recipe Prices] Beginning aggregate search for: ${normalized.map(i => i.name).join(', ')}`);
 
-      // 3. ShelfAtlas (valgfrit — regular + campaign priser for fysiske butikker)
-      const shelfItems = await fetchShelfAtlas(ingredient, location);
-
-      const combined = [...nemligItems, ...tjekItems, ...shelfItems];
-      
-      // Sort cheapest first
-      combined.sort((a, b) => {
-        if (a.price === null) return 1;
-        if (b.price === null) return -1;
-        return a.price - b.price;
-      });
-      
-      setCachedSearch(ingredient, combined);
-      return combined;
-    } catch (err) {
-      console.error(`[Recipe Prices] Search failed for "${ingredient}":`, err.message);
-      return [];
-    }
-  };
-  
   try {
-    // Generate tasks for the rate-limiter (use searchQuery for better API results)
-    const tasks = normalizedIngredients.map(ing => () => searchForIngredient(ing.searchQuery || ing.name).then(results => ({
-      ingredient: ing,
-      results
-    })));
-    
-    // Run search tasks with max 3 concurrent requests to avoid rate limits
-    const searchResults = await limitParallel(tasks, 3);
-    
-    const aggregated = searchResults.map(({ ingredient, results }) => {
-      const withPrice = results.filter(r => r.price !== null);
-      
-      // Attach distance to nearest store branch when a user location is provided.
-      // Tjek mangler koordinater (bruger vores butiksdata); ShelfAtlas har allerede
-      // distanceKm; nemlig forbliver null.
-      const located = location
-        ? withPrice.map(r => ({
-            ...r,
-            distanceKm: r.source === 'tjek'
-              ? nearestStoreDistanceKm(r.store, location.lat, location.lon)
-              : (r.distanceKm ?? null)
-          }))
-        : withPrice;
-      
-      // Score and sort results by relevance before price
-      const scored = located.map(r => ({
-        ...r,
-        _score: scoreProductRelevance(r, ingredient)
-      })).filter(r => r._score > -9999); // Remove blacklisted items
-      
-      // Sort: descending relevance score, then ascending price as tie-breaker
-      scored.sort((a, b) => {
-        if (b._score !== a._score) return b._score - a._score;
-        return (a.price || 99999) - (b.price || 99999);
-      });
-      
-      const bestMatch = scored[0] || null;
-      const organicOption = scored.find(r => r.isOrganic) || null;
-      
-      return {
-        ingredient: ingredient.name, // Send back just the name for the frontend
-        searchQuery: ingredient.searchQuery,
-        category: ingredient.category,
-        amount: ingredient.amount ?? null,
-        unit: ingredient.unit ?? null,
-        bestMatch,
-        organicOption,
-        alternatives: scored.slice(0, 60)
-      };
-    });
-    
-    // Calculate recommended store (the store that can deliver most of the ingredients)
-    const storeCount = {};
-    let matchedCount = 0;
-    
-    aggregated.forEach(item => {
-      if (item.bestMatch) {
-        matchedCount++;
-        const store = item.bestMatch.store;
-        storeCount[store] = (storeCount[store] || 0) + 1;
-      }
-    });
-    
-    let recommendedStore = "Ingen match";
-    let maxMatches = 0;
-    for (const [store, count] of Object.entries(storeCount)) {
-      if (count > maxMatches) {
-        maxMatches = count;
-        recommendedStore = store;
-      }
-    }
-    
-    const totalEstimate = aggregated.reduce((acc, item) => acc + (item.bestMatch?.price || 0), 0);
-    const organicTotalEstimate = aggregated.reduce((acc, item) => {
-      const match = item.organicOption || item.bestMatch;
-      return acc + (match?.price || 0);
-    }, 0);
-    
-    res.json({
-      ingredients: aggregated,
-      shelfAtlasActive: !!process.env.SHELFATLAS_API_KEY,
-      summary: {
-        totalEstimate: parseFloat(totalEstimate.toFixed(2)),
-        organicTotalEstimate: parseFloat(organicTotalEstimate.toFixed(2)),
-        matchedCount,
-        totalCount: ingredients.length,
-        recommendedStore,
-        storeMatches: maxMatches
-      }
-    });
-    
+    res.json(await aggregateIngredientPrices(normalized, location));
   } catch (error) {
     console.error("[Recipe Prices] Processing error:", error);
     res.status(500).json({ error: "Fejl under prissammenligning for opskriften." });
+  }
+});
+
+// --- Shopping list (long lists, with or without an LLM) ---
+
+// 4. Parse a pasted shopping list. LLM-assisted parsing is optional; when it
+// fails (or is disabled) we always fall back to the local heuristic parser.
+app.post('/api/list/parse', async (req, res) => {
+  const { text, useLLM, provider, apiKey, baseUrl, model } = req.body || {};
+
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: "Indkøbsliste mangler" });
+  }
+
+  const heuristic = normalizeParsedItems(parseShoppingListHeuristic(text));
+  if (heuristic.length === 0) {
+    return res.status(400).json({ error: "Kunne ikke finde nogen varer i listen." });
+  }
+
+  if (!useLLM || !provider) {
+    return res.json({ items: heuristic, source: 'heuristic' });
+  }
+
+  try {
+    console.log(`[List Parse] LLM-assisted parsing with ${provider}`);
+    const responseText = await callLLM({
+      provider, apiKey, baseUrl, model,
+      prompt: buildListParsePrompt(text)
+    });
+
+    const parsed = extractJsonArray(responseText);
+    let items = normalizeParsedItems(parsed);
+
+    // Never return an empty list just because the LLM misbehaved.
+    if (items.length === 0) items = heuristic;
+
+    res.json({ items, source: 'llm' });
+  } catch (err) {
+    console.warn('[List Parse] LLM parsing failed, using local parser:', err.message);
+    res.json({
+      items: heuristic,
+      source: 'heuristic',
+      warning: `AI kunne ikke forstå listen (${err.message}). Derfor blev den lokale læsning brugt i stedet.`
+    });
+  }
+});
+
+// 5. Search prices for the parsed shopping list. Same aggregation as recipes.
+app.post('/api/list/search', async (req, res) => {
+  const { items } = req.body || {};
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "Varer skal angives som et array" });
+  }
+
+  const location = parseLocation(req.body.lat, req.body.lon);
+  const normalized = normalizeParsedItems(items);
+  if (normalized.length === 0) {
+    return res.status(400).json({ error: "Ingen gyldige varer" });
+  }
+
+  // Client may have edited a searchQuery manually — strip stray quantities.
+  for (const item of normalized) {
+    item.searchQuery = cleanSearchQuery(item.searchQuery);
+  }
+
+  console.log(`[List Search] Searching ${normalized.length} items: ${normalized.slice(0, 8).map(i => i.name).join(', ')}...`);
+
+  try {
+    res.json(await aggregateIngredientPrices(normalized, location));
+  } catch (error) {
+    console.error("[List Search] Processing error:", error);
+    res.status(500).json({ error: "Fejl under søgning efter indkøbslisten." });
   }
 });
 
